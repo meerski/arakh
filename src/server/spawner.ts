@@ -43,10 +43,10 @@ function findSuitableRegions(
 function buildSpawnNarrative(character: Character, regionName: string, speciesName: string): string {
   const greetings = [
     `A ${speciesName} named ${character.name} stirs to life in ${regionName}. The world stretches out, vast and unknowable.`,
-    `${character.name} opens their eyes for the first time. ${regionName} hums with unfamiliar sounds. Everything must be learned.`,
+    `${character.name}, a ${speciesName}, opens their eyes for the first time. ${regionName} hums with unfamiliar sounds. Everything must be learned.`,
     `The wind carries strange scents across ${regionName}. ${character.name}, a young ${speciesName}, takes a first uncertain breath.`,
     `In ${regionName}, a new ${speciesName} called ${character.name} begins to exist. No memories. No knowledge. Only instinct.`,
-    `${character.name} awakens in ${regionName}. The ground is solid underfoot. The sky is overhead. Beyond that, nothing is certain.`,
+    `${character.name}, a ${speciesName}, awakens in ${regionName}. The ground is solid underfoot. The sky is overhead. Beyond that, nothing is certain.`,
   ];
   return worldRNG.pick(greetings);
 }
