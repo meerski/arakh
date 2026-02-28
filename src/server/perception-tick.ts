@@ -328,13 +328,13 @@ function buildThreats(
 }
 
 /** Patterns that indicate animal-based food (carnivore/omnivore relevant) */
-const ANIMAL_FOOD_PATTERNS = /fish|salmon|tuna|herring|sardine|krill|shrimp|crab|shellfish|squid|insect|worm|carrion|meat|egg|prey|rodent|mammal|bird|tilapia|lobster|clam|mussel|oyster|octopus|seal|whale|deer|rabbit|snake|frog|lizard/i;
+const ANIMAL_FOOD_PATTERNS = /fish|salmon|tuna|herring|sardine|krill|shrimp|crab|shellfish|squid|insect|worm|carrion|meat|egg|prey|rodent|mammal|bird|tilapia|lobster|clam|mussel|oyster|octopus|seal|whale|deer|rabbit|snake|frog|lizard|caribou|pike|abalone|eland|wombat|king_crab|elephant_seal|walrus|penguin|albatross|jellyfish|sturgeon|crawfish|catfish|trout|bass|anchov/i;
 
 /** Patterns that indicate plant-based food (herbivore/omnivore relevant) */
-const PLANT_FOOD_PATTERNS = /grass|vegetation|berr|fruit|seed|algae|plankton|kelp|leaf|leaves|bark|root|nut|nectar|flower|fungi|bamboo|seagrass|lichen|moss|tuber|grain|millet|cacao|coffee|vanilla|palm|acacia|shea|gum|argan|rubber|coconut|mango|banana|papyrus|rice|wheat|sorghum|yam|cassava|taro|fern|herb/i;
+const PLANT_FOOD_PATTERNS = /grass|vegetation|berr|fruit|seed|algae|plankton|kelp|leaf|leaves|bark|root|nut|nectar|flower|fungi|bamboo|seagrass|lichen|moss|tuber|grain|millet|cacao|coffee|vanilla|palm|acacia|shea|gum|argan|rubber|coconut|mango|banana|papyrus|rice|wheat|sorghum|yam|cassava|taro|fern|herb|potato|pistachio|saffron|date|chestnut|ginseng|agave|barley|saltbush|spinifex|welwitschia|joshua_tree|edelweiss|cactus|peat|beech|birch|spruce|pine|eucalyptus|reed|quinoa|breadfruit|clove|nutmeg|pepper|tea|olive|grape|fig|citrus|melon|squash|bean|lentil|pea/i;
 
 /** Patterns for water sources (relevant to all species) */
-const WATER_PATTERNS = /water|fresh_water|spring|oasis|river|stream/i;
+const WATER_PATTERNS = /water|fresh_water|spring|oasis|river|stream|geothermal/i;
 
 /** Patterns for materials only intelligent species would notice */
 const MATERIAL_PATTERNS = /wood|hardwood|rosewood|cedar|stone|iron|copper|clay|flint|obsidian|sulfur|salt|gem|gold|silver|diamond|sapphire|phosphate|marble|granite|sand|silt|coral|amber|jade|tin|coal|oil|crystal/i;
@@ -400,6 +400,24 @@ function buildOpportunities(
       .filter(c => c.id !== character.id && c.isAlive);
     if (preyInRegion.length > 0 && opportunities.length < maxVisible) {
       opportunities.push('the scent of prey carries on the current');
+    }
+  }
+
+  // If no food found, provide environmental awareness hints
+  if (opportunities.length === 0) {
+    const biomeHints: Record<string, string[]> = {
+      mountain: ['the terrain is steep and rocky, but life clings to the crevices', 'thin air carries faint scents from the valleys below'],
+      desert: ['the barren landscape offers little, but something stirs beneath the sand', 'the dry wind carries distant scents'],
+      tundra: ['the frozen ground hides what little sustenance exists here', 'beneath the ice, faint signs of life persist'],
+      boreal_forest: ['the dense forest holds secrets among its roots', 'the scent of resin mingles with something faintly edible'],
+      deep_ocean: ['the crushing depths hold sparse but concentrated life', 'faint chemical traces drift through the darkness'],
+      cave_system: ['dampness clings to the walls — something grows in the dark', 'the still air carries the faintest organic traces'],
+    };
+    const hints = biomeHints[region.biome];
+    if (hints) {
+      opportunities.push(worldRNG.pick(hints));
+    } else {
+      opportunities.push('the environment holds potential, but nothing obvious presents itself');
     }
   }
 
