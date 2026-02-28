@@ -94,20 +94,27 @@ describe('Fame & Standing System', () => {
   describe('fameToCardRarity', () => {
     it('returns common for low fame', () => {
       expect(fameToCardRarity(0)).toBe('common');
-      expect(fameToCardRarity(49)).toBe('common');
+      expect(fameToCardRarity(24)).toBe('common');
     });
 
-    it('returns uncommon for notable fame', () => {
-      expect(fameToCardRarity(50)).toBe('uncommon');
+    it('returns uncommon for modest fame', () => {
+      expect(fameToCardRarity(25)).toBe('uncommon');
     });
 
-    it('returns rare for famous characters', () => {
-      expect(fameToCardRarity(150)).toBe('rare');
+    it('returns rare for notable fame', () => {
+      expect(fameToCardRarity(50)).toBe('rare');
+    });
+
+    it('returns epic for famous characters', () => {
+      expect(fameToCardRarity(150)).toBe('epic');
     });
 
     it('returns legendary for legendary fame', () => {
       expect(fameToCardRarity(500)).toBe('legendary');
-      expect(fameToCardRarity(1500)).toBe('legendary');
+    });
+
+    it('returns mythic for mythical fame', () => {
+      expect(fameToCardRarity(1500)).toBe('mythic');
     });
   });
 

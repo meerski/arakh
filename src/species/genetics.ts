@@ -2,7 +2,7 @@
 // Breeding, Inheritance, Mutation
 // ============================================================
 
-import type { Character, CharacterId, SpeciesId, Genetics } from '../types.js';
+import type { Character, CharacterId, SpeciesId, Genetics, Species, SpeciesTraits, TaxonomyPath, PerceptionProfile } from '../types.js';
 import { worldRNG } from '../simulation/random.js';
 import { speciesRegistry } from './species.js';
 import { createCharacter } from './character.js';
@@ -123,6 +123,148 @@ export function checkHybridSpeciation(parent1: Character, parent2: Character): b
 }
 
 // ============================================================
+// Cross-Species Breeding — Danger Evaluation
+// ============================================================
+
+export type CrossBreedOutcome = 'death' | 'rejection' | 'success' | 'new_species';
+
+export interface CrossBreedResult {
+  outcome: CrossBreedOutcome;
+  deathTarget?: 'initiator'; // only the initiator can die
+}
+
+/** Evaluate what happens when two different species try to breed */
+export function evaluateCrossSpeciesEncounter(
+  initiator: Character,
+  target: Character,
+): CrossBreedResult {
+  const sp1 = speciesRegistry.get(initiator.speciesId);
+  const sp2 = speciesRegistry.get(target.speciesId);
+  if (!sp1 || !sp2) return { outcome: 'rejection' };
+
+  // Size difference makes it more dangerous for the smaller one
+  const sizeDiff = Math.abs(sp1.traits.size - sp2.traits.size);
+  const initiatorSmaller = sp1.traits.size < sp2.traits.size;
+
+  // Base danger: large size difference + carnivore target = very dangerous
+  let deathChance = 0.3; // base 30%
+
+  // Size difference adds danger
+  deathChance += Math.min(0.4, sizeDiff / 100);
+
+  // Diet mismatch: carnivore meeting herbivore = danger for herbivore
+  if (sp2.traits.diet === 'carnivore' && sp1.traits.diet !== 'carnivore') {
+    deathChance += 0.2;
+  }
+  if (sp1.traits.diet === 'carnivore' && sp2.traits.diet !== 'carnivore') {
+    deathChance -= 0.1; // predator approaching prey is slightly safer for predator
+  }
+
+  // High aggression target = more dangerous
+  const targetAggression = target.genetics.genes.find(g => g.trait === 'aggression')?.value ?? 30;
+  deathChance += targetAggression / 500;
+
+  // Positive relationship reduces danger
+  const rel = initiator.relationships.find(r => r.targetId === target.id);
+  if (rel && rel.strength > 0) {
+    deathChance -= rel.strength * 0.3;
+  }
+
+  // Same habitat = slightly safer
+  const sharedHabitat = sp1.traits.habitat.some(h => sp2.traits.habitat.includes(h));
+  if (sharedHabitat) deathChance -= 0.05;
+
+  // Clamp
+  deathChance = Math.max(0.1, Math.min(0.95, deathChance));
+
+  // Roll outcomes
+  const roll = worldRNG.float(0, 1);
+
+  if (roll < deathChance) {
+    return { outcome: 'death', deathTarget: 'initiator' };
+  }
+
+  // Remaining probability split: ~75% rejection, ~20% success, ~5% new species
+  const remaining = 1 - deathChance;
+  const rejectThreshold = deathChance + remaining * 0.75;
+  const successThreshold = deathChance + remaining * 0.95;
+
+  if (roll < rejectThreshold) {
+    return { outcome: 'rejection' };
+  }
+  if (roll < successThreshold) {
+    return { outcome: 'success' };
+  }
+  return { outcome: 'new_species' };
+}
+
+/** Create a hybrid species from two parent species */
+export function createHybridSpecies(species1: Species, species2: Species): Species {
+  // Generate portmanteau name
+  const name1 = species1.commonName;
+  const name2 = species2.commonName;
+  const hybridName = generatePortmanteau(name1, name2);
+
+  // Weighted average traits (closer parent gets more weight)
+  const t1 = species1.traits;
+  const t2 = species2.traits;
+  const w1 = 0.6; // slight bias toward first parent
+  const w2 = 0.4;
+
+  const hybridPerception: PerceptionProfile = {
+    visualRange: Math.round(t1.perception.visualRange * w1 + t2.perception.visualRange * w2),
+    hearingRange: Math.round(t1.perception.hearingRange * w1 + t2.perception.hearingRange * w2),
+    smellRange: Math.round(t1.perception.smellRange * w1 + t2.perception.smellRange * w2),
+    echolocation: t1.perception.echolocation || t2.perception.echolocation,
+    electroreception: t1.perception.electroreception || t2.perception.electroreception,
+    thermalSensing: t1.perception.thermalSensing || t2.perception.thermalSensing,
+  };
+
+  const hybridTraits: SpeciesTraits = {
+    lifespan: Math.round(t1.lifespan * w1 + t2.lifespan * w2),
+    size: Math.round(t1.size * w1 + t2.size * w2 + worldRNG.gaussian(0, 5)),
+    speed: Math.round(t1.speed * w1 + t2.speed * w2 + worldRNG.gaussian(0, 3)),
+    strength: Math.round(t1.strength * w1 + t2.strength * w2 + worldRNG.gaussian(0, 3)),
+    intelligence: Math.round(t1.intelligence * w1 + t2.intelligence * w2 + worldRNG.gaussian(0, 3)),
+    perception: hybridPerception,
+    diet: worldRNG.chance(w1) ? t1.diet : t2.diet,
+    habitat: [...new Set([...t1.habitat, ...t2.habitat])],
+    socialStructure: worldRNG.chance(w1) ? t1.socialStructure : t2.socialStructure,
+    reproductionRate: Math.round(t1.reproductionRate * w1 + t2.reproductionRate * w2),
+    gestationTicks: Math.round(t1.gestationTicks * w1 + t2.gestationTicks * w2),
+    maturityTicks: Math.round(t1.maturityTicks * w1 + t2.maturityTicks * w2),
+    nocturnal: worldRNG.chance(0.5) ? t1.nocturnal : t2.nocturnal,
+    aquatic: t1.aquatic || t2.aquatic,
+    canFly: t1.canFly && t2.canFly, // both must fly
+  };
+
+  // Taxonomy: new genus under the closer parent's family
+  const taxonomy: TaxonomyPath = {
+    class: species1.taxonomy.class,
+    order: species1.taxonomy.order,
+    family: species1.taxonomy.family,
+    genus: `Hybrid_${species1.taxonomy.genus}_${species2.taxonomy.genus}`.slice(0, 30),
+    species: hybridName,
+  };
+
+  return speciesRegistry.register({
+    commonName: hybridName,
+    scientificName: `${taxonomy.genus} ${hybridName.toLowerCase()}`,
+    taxonomy,
+    tier: 'generated',
+    traitOverrides: hybridTraits,
+  });
+}
+
+function generatePortmanteau(name1: string, name2: string): string {
+  // Take first half of name1 and second half of name2
+  const mid1 = Math.ceil(name1.length / 2);
+  const mid2 = Math.floor(name2.length / 2);
+  const result = name1.slice(0, mid1) + name2.slice(mid2);
+  return result.charAt(0).toUpperCase() + result.slice(1).toLowerCase();
+}
+
+// ============================================================
 // Breed Orchestrator — produces offspring from two parents
 // ============================================================
 
@@ -144,7 +286,19 @@ export function breed(parent1: Character, parent2: Character, tick: number): Bir
   if (!species) return null;
 
   const offspringCount = check.offspringCount ?? 1;
-  const isHybrid = parent1.speciesId !== parent2.speciesId && checkHybridSpeciation(parent1, parent2);
+  const isCrossSpecies = parent1.speciesId !== parent2.speciesId;
+  const isHybrid = isCrossSpecies && checkHybridSpeciation(parent1, parent2);
+
+  // For hybrid speciation, create a new species
+  let offspringSpeciesId = parent1.speciesId;
+  if (isHybrid && isCrossSpecies) {
+    const sp1 = speciesRegistry.get(parent1.speciesId);
+    const sp2 = speciesRegistry.get(parent2.speciesId);
+    if (sp1 && sp2) {
+      const hybridSpecies = createHybridSpecies(sp1, sp2);
+      offspringSpeciesId = hybridSpecies.id;
+    }
+  }
 
   // Determine the mother (female parent) for gestation
   const mother = parent1.sex === 'female' ? parent1 : parent2;
@@ -161,7 +315,7 @@ export function breed(parent1: Character, parent2: Character, tick: number): Bir
   const offspring: Character[] = [];
   for (let i = 0; i < offspringCount; i++) {
     const child = createCharacter({
-      speciesId: parent1.speciesId, // For hybrids, this would be the new species
+      speciesId: offspringSpeciesId,
       regionId: mother.regionId,
       familyTreeId: mother.familyTreeId,
       parentIds: [parent1.id, parent2.id],

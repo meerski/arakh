@@ -26,10 +26,11 @@ export const FAME_THRESHOLDS = {
 
 /** Determine card rarity boost from fame */
 export function fameToCardRarity(fame: number): CardRarity {
-  if (fame >= FAME_THRESHOLDS.mythical) return 'legendary';
+  if (fame >= FAME_THRESHOLDS.mythical) return 'mythic';
   if (fame >= FAME_THRESHOLDS.legendary) return 'legendary';
-  if (fame >= FAME_THRESHOLDS.famous) return 'rare';
-  if (fame >= FAME_THRESHOLDS.notable) return 'uncommon';
+  if (fame >= FAME_THRESHOLDS.famous) return 'epic';
+  if (fame >= FAME_THRESHOLDS.notable) return 'rare';
+  if (fame >= 25) return 'uncommon';
   return 'common';
 }
 

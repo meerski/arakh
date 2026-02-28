@@ -12,11 +12,12 @@ import { playerManager } from '../game/player.js';
 import { lineageManager } from '../game/lineage.js';
 import { worldRNG } from '../simulation/random.js';
 import { determineRespawn } from '../game/respawn.js';
+import { isBiomeSuitable } from '../simulation/biome.js';
 import type { Session } from './session.js';
 
 /**
- * Find regions whose layer matches at least one of the species' habitat layers.
- * Returns a filtered list of suitable regions for spawning.
+ * Find regions suitable for a species based on habitat layer AND biome/climate.
+ * Prevents tropical species from spawning in polar regions and vice versa.
  */
 function findSuitableRegions(
   speciesId: string,
@@ -29,12 +30,55 @@ function findSuitableRegions(
   const suitable: Region[] = [];
 
   for (const region of regions.values()) {
-    if (validLayers.has(region.layer)) {
+    if (validLayers.has(region.layer) && isBiomeSuitable(species, region)) {
       suitable.push(region);
     }
   }
 
   return suitable;
+}
+
+/**
+ * Pick a spawn region, preferring regions where conspecifics already live.
+ * If no conspecifics exist yet, falls back to a random suitable region.
+ * Connected regions (neighbours) of populated ones are also favoured so
+ * the newcomer spawns "nearby" rather than on top of the herd.
+ */
+function pickSpawnRegion(
+  speciesId: string,
+  suitable: Region[],
+  regions: Map<string, Region>,
+): Region {
+  const living = characterRegistry.getLivingBySpecies(speciesId);
+  if (living.length === 0) return worldRNG.pick(suitable);
+
+  // Collect regions where this species already has members
+  const populatedIds = new Set(living.map(c => c.regionId));
+
+  // Prefer: regions connected to populated ones (close proximity, not identical)
+  const suitableIds = new Set(suitable.map(r => r.id));
+  const nearby: Region[] = [];
+  const populated: Region[] = [];
+
+  for (const region of suitable) {
+    if (populatedIds.has(region.id)) {
+      populated.push(region);
+      // Also add connected regions that are suitable
+      for (const connId of region.connections) {
+        if (suitableIds.has(connId) && !populatedIds.has(connId)) {
+          const conn = regions.get(connId);
+          if (conn) nearby.push(conn);
+        }
+      }
+    }
+  }
+
+  // Best: spawn in a neighbouring region so they can find the herd
+  if (nearby.length > 0) return worldRNG.pick(nearby);
+  // Good: spawn in the same region as conspecifics
+  if (populated.length > 0) return worldRNG.pick(populated);
+  // Fallback: random suitable region
+  return worldRNG.pick(suitable);
 }
 
 /**
@@ -111,7 +155,7 @@ export function spawnCharacter(
   const suitable = findSuitableRegions(species.id, regions);
   if (suitable.length === 0) return null;
 
-  const region = worldRNG.pick(suitable);
+  const region = pickSpawnRegion(species.id, suitable, regions);
 
   const player = playerManager.getPlayer(playerId);
   if (!player) return null;
@@ -206,7 +250,7 @@ export function respawnCharacter(
   const suitable = findSuitableRegions(result.speciesId, regions);
   if (suitable.length === 0) return null;
 
-  const region = worldRNG.pick(suitable);
+  const region = pickSpawnRegion(result.speciesId, suitable, regions);
 
   const character = createCharacter({
     speciesId: result.speciesId,

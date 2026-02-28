@@ -45,8 +45,10 @@ export function createCard(character: Character, ownerId: OwnerId, era: string =
 }
 
 export function calculateRarity(character: Character): CardRarity {
-  if (character.isGenesisElder) return 'genesis';
-  if (character.fame >= 100) return 'legendary';
+  if (character.isGenesisElder) return 'mythic';
+  if (character.fame >= 500) return 'mythic';
+  if (character.fame >= 200) return 'legendary';
+  if (character.fame >= 100 || character.achievements.length >= 8) return 'epic';
   if (character.fame >= 50 || character.achievements.length >= 5) return 'rare';
   if (character.fame >= 20 || character.achievements.length >= 2) return 'uncommon';
   return 'common';

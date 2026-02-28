@@ -21,8 +21,9 @@ export interface DynastyScoreBreakdown {
 }
 
 const CARD_RARITY_POINTS: Record<CardRarity, number> = {
-  genesis: 50,
+  mythic: 50,
   legendary: 30,
+  epic: 15,
   rare: 10,
   uncommon: 3,
   common: 1,
@@ -126,7 +127,7 @@ export function getOwnerDashboard(ownerId: OwnerId): OwnerDashboard | null {
   // Card summary
   const cards = cardCollection.getByOwner(ownerId);
   const byRarity: Record<CardRarity, number> = {
-    genesis: 0, legendary: 0, rare: 0, uncommon: 0, common: 0,
+    common: 0, uncommon: 0, rare: 0, epic: 0, legendary: 0, mythic: 0,
   };
   for (const card of cards) {
     byRarity[card.rarity] = (byRarity[card.rarity] ?? 0) + 1;

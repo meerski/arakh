@@ -42,14 +42,19 @@ describe('Card System', () => {
     expect(card.rarity).toBe('common');
   });
 
-  it('genesis elder gets genesis rarity', () => {
+  it('genesis elder gets mythic rarity', () => {
     const char = mockCharacter({ isGenesisElder: true });
-    expect(calculateRarity(char)).toBe('genesis');
+    expect(calculateRarity(char)).toBe('mythic');
   });
 
   it('high fame gets legendary rarity', () => {
-    const char = mockCharacter({ fame: 100 });
+    const char = mockCharacter({ fame: 200 });
     expect(calculateRarity(char)).toBe('legendary');
+  });
+
+  it('good fame gets epic rarity', () => {
+    const char = mockCharacter({ fame: 100 });
+    expect(calculateRarity(char)).toBe('epic');
   });
 
   it('moderate fame gets rare rarity', () => {
@@ -90,7 +95,7 @@ describe('CardCollection', () => {
     collection.addCard(common);
     collection.addCard(genesis);
 
-    expect(collection.getByRarity('genesis')).toHaveLength(1);
+    expect(collection.getByRarity('mythic')).toHaveLength(1);
     expect(collection.getByRarity('common')).toHaveLength(1);
   });
 });

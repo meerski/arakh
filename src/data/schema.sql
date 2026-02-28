@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS cards (
   id UUID PRIMARY KEY,
   character_id UUID NOT NULL REFERENCES characters(id),
   owner_id UUID NOT NULL,
-  rarity TEXT NOT NULL CHECK (rarity IN ('genesis', 'legendary', 'rare', 'uncommon', 'common')),
+  rarity TEXT NOT NULL CHECK (rarity IN ('common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic')),
   species_id UUID NOT NULL REFERENCES species(id),
   character_name TEXT NOT NULL,
   taxonomy JSONB NOT NULL,

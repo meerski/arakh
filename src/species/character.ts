@@ -60,6 +60,8 @@ export function createCharacter(params: {
     fame: 0,
     achievements: [],
     isGenesisElder: params.isGenesisElder ?? false,
+    socialRank: params.isGenesisElder ? 50 : 0,
+    loyalties: new Map(),
   };
 }
 

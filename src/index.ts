@@ -16,6 +16,10 @@ import { generateHiddenLocations } from './game/exploration.js';
 import { seedTaxonomy } from './data/taxonomy/seed.js';
 import { seedRegions } from './data/earth/seed.js';
 import { broadcastPerceptionTicks } from './server/perception-tick.js';
+import { isBiomeSuitable, getBiomeCapacityMultiplier } from './simulation/biome.js';
+import { tickPolitics } from './game/politics.js';
+import { tickEvolution } from './game/advancement.js';
+import { characterRegistry } from './species/registry.js';
 import type { World, Region, SpeciesId } from './types.js';
 import type { EcosystemState } from './simulation/ecosystem.js';
 
@@ -88,6 +92,34 @@ async function main() {
       time.season,
       weather,
     );
+
+    // Run politics tick (every 10 ticks to avoid performance impact)
+    if (result.tick % 10 === 0) {
+      const allLiving = characterRegistry.getLiving();
+      const politicalEvents = tickPolitics(allLiving, result.tick);
+      for (const pe of politicalEvents) {
+        liveFeed.addBroadcast(pe.narrative, result.tick);
+      }
+    }
+
+    // Run evolution tick (handled internally — checks every 500 ticks)
+    if (result.tick % 500 === 0) {
+      const allLiving = characterRegistry.getLiving();
+      // Group by species+region
+      const groups = new Map<string, { speciesId: string; regionId: string; chars: typeof allLiving }>();
+      for (const c of allLiving) {
+        const key = `${c.speciesId}:${c.regionId}`;
+        const g = groups.get(key);
+        if (g) g.chars.push(c);
+        else groups.set(key, { speciesId: c.speciesId, regionId: c.regionId, chars: [c] });
+      }
+      for (const { speciesId, regionId, chars } of groups.values()) {
+        const evoNarrative = tickEvolution(speciesId, regionId, chars, result.tick);
+        if (evoNarrative) {
+          liveFeed.addBroadcast(evoNarrative, result.tick);
+        }
+      }
+    }
 
     // News broadcast + live feed
     const broadcasts = newsBroadcast.processTick(result);
@@ -220,53 +252,7 @@ function initializeBalancedEcosystem(world: World, ecosystem: EcosystemState): v
   console.log(`Initialized food web with ${ecosystem.foodWeb.length} predator-prey relationships`);
 }
 
-/** Check if a biome is suitable for a species based on its traits */
-function isBiomeSuitable(species: ReturnType<typeof speciesRegistry.get> & {}, region: Region): boolean {
-  const { biome } = region;
-  const { aquatic, canFly } = species.traits;
-
-  // Aquatic species need water biomes
-  if (aquatic) {
-    return ['coral_reef', 'open_ocean', 'deep_ocean', 'hydrothermal_vent', 'kelp_forest',
-      'wetland', 'coastal', 'underground_river'].includes(biome);
-  }
-
-  // Flying species can go almost anywhere on surface
-  if (canFly && region.layer === 'surface') return true;
-
-  // Underground species
-  if (region.layer === 'underground') {
-    // Only small species fit underground
-    return species.traits.size < 30;
-  }
-
-  // General surface suitability
-  return region.layer === 'surface';
-}
-
-function getBiomeCapacityMultiplier(biome: string): number {
-  const multipliers: Record<string, number> = {
-    tropical_rainforest: 3.0,
-    temperate_forest: 2.0,
-    boreal_forest: 1.5,
-    savanna: 2.0,
-    grassland: 2.0,
-    desert: 0.5,
-    tundra: 0.3,
-    mountain: 0.8,
-    wetland: 2.5,
-    coastal: 2.0,
-    coral_reef: 3.0,
-    open_ocean: 1.0,
-    deep_ocean: 0.3,
-    hydrothermal_vent: 0.5,
-    kelp_forest: 2.0,
-    cave_system: 0.5,
-    underground_river: 0.8,
-    subterranean_ecosystem: 0.6,
-  };
-  return multipliers[biome] ?? 1.0;
-}
+// isBiomeSuitable and getBiomeCapacityMultiplier imported from ./simulation/biome.js
 
 main().catch(err => {
   console.error('Fatal error:', err);

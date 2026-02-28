@@ -8,7 +8,9 @@ import type {
 } from '../types.js';
 import { worldRNG } from '../simulation/random.js';
 import { getGeneValue } from '../species/character.js';
-import { canBreed, breed } from '../species/genetics.js';
+import { funnyNarrative, getSpeciesCategory, type SpeciesCategory } from '../narrative/humor.js';
+import { evaluateProposal } from './diplomacy.js';
+import { canBreed, breed, evaluateCrossSpeciesEncounter } from '../species/genetics.js';
 import { canCommunicate } from './language.js';
 import { observeSpecies, createSpeciesDiscoveryEvent } from '../species/discovery.js';
 import { attemptDiscovery } from './exploration.js';
@@ -254,6 +256,7 @@ const ACTION_HANDLERS: Record<ActionType, ActionHandler> = {
   experiment: handleExperiment,
   observe: handleObserve,
   inspect: handleInspect,
+  propose: handlePropose,
 };
 
 function handleMove(action: AgentAction, ctx: ActionContext): ActionResult {
@@ -300,26 +303,41 @@ function handleExplore(_action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleForage(_action: AgentAction, ctx: ActionContext): ActionResult {
-  const hasFood = ctx.availableResources.some(r =>
-    ['grass', 'vegetation', 'berries', 'fruit', 'seeds', 'algae', 'plankton'].includes(r),
-  );
+  const species = speciesRegistry.get(ctx.character.speciesId);
+  const diet = species?.traits.diet ?? 'omnivore';
+
+  // Find food matching the species' diet
+  const foodPattern = diet === 'carnivore' ? ANIMAL_FOOD_PATTERN
+    : diet === 'herbivore' ? PLANT_FOOD_PATTERN
+    : diet === 'filter_feeder' ? /plankton|krill|algae|seagrass/i
+    : diet === 'detritivore' ? /carrion|fungi|worm|leaf|leaves|bark|moss|lichen|silt/i
+    : new RegExp(`${ANIMAL_FOOD_PATTERN.source}|${PLANT_FOOD_PATTERN.source}`, 'i'); // omnivore
+
+  const hasFood = ctx.availableResources.some(r => foodPattern.test(r));
   const success = hasFood && worldRNG.chance(0.7);
 
   if (success) {
-    // Consume some vegetation resource
+    // Consume a matching food resource
     const foodResource = ctx.region.resources.find(r =>
-      r.quantity > 0 && ['grass', 'vegetation', 'berries', 'fruit', 'seeds', 'algae', 'plankton'].includes(r.type),
+      r.quantity > 0 && foodPattern.test(r.type),
     );
     if (foodResource) {
       foodResource.quantity = Math.max(0, foodResource.quantity - 2);
     }
   }
 
+  const dietNarratives: Record<string, [string, string]> = {
+    carnivore: ['You find scraps of prey to sustain yourself.', 'You search for prey but find nothing to eat.'],
+    herbivore: ['You find edible vegetation and graze.', 'You search for food but find nothing edible nearby.'],
+    omnivore: ['You find sustenance nearby.', 'You search for food but find nothing edible nearby.'],
+    filter_feeder: ['You filter nutrients from the water around you.', 'The water yields nothing to filter.'],
+    detritivore: ['You find decaying matter to feed on.', 'You search the ground but find nothing to consume.'],
+  };
+  const [successText, failText] = dietNarratives[diet] ?? dietNarratives.omnivore;
+
   return {
     success,
-    narrative: success
-      ? `You find sustenance among the vegetation.`
-      : `You search for food but find nothing edible nearby.`,
+    narrative: success ? successText : failText,
     effects: success ? [
       { type: 'hunger_decrease', target: ctx.character.id, value: -0.3 },
     ] : [],
@@ -563,31 +581,93 @@ function handleFlee(_action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleBreed(_action: AgentAction, ctx: ActionContext): ActionResult {
-  // Find a potential mate — opposite sex, same species
-  const potentialMates = ctx.nearbyCharacters.filter(c =>
+  // Find a potential mate — opposite sex, preferably same species
+  const sameSpeciesMates = ctx.nearbyCharacters.filter(c =>
     c.speciesId === ctx.character.speciesId &&
     c.sex !== ctx.character.sex &&
     c.isAlive,
   );
 
-  if (potentialMates.length === 0) {
+  // Also consider cross-species mates (any nearby opposite-sex alive character)
+  const crossSpeciesMates = ctx.nearbyCharacters.filter(c =>
+    c.speciesId !== ctx.character.speciesId &&
+    c.isAlive,
+  );
+
+  const mate = sameSpeciesMates.length > 0
+    ? sameSpeciesMates.sort((a, b) => b.health - a.health)[0]
+    : crossSpeciesMates.length > 0
+      ? crossSpeciesMates.sort((a, b) => b.health - a.health)[0]
+      : null;
+
+  if (!mate) {
+    const species = speciesRegistry.get(ctx.character.speciesId);
+    const category = species ? getSpeciesCategory(species.taxonomy) : 'small_mammal' as SpeciesCategory;
+    const funny = funnyNarrative(category, 'breeding_fail', {
+      name: ctx.character.name,
+      speciesName: species?.commonName ?? 'creature',
+    });
     return {
       success: false,
-      narrative: `Breeding requires a willing mate nearby.`,
+      narrative: funny ?? `Breeding requires a willing mate nearby.`,
       effects: [],
       sensoryData: buildSensoryData(ctx),
     };
   }
 
-  // Pick healthiest mate
-  const mate = potentialMates.sort((a, b) => b.health - a.health)[0];
+  // Cross-species breeding: evaluate danger
+  if (mate.speciesId !== ctx.character.speciesId) {
+    const encounter = evaluateCrossSpeciesEncounter(ctx.character, mate);
+    const sp1 = speciesRegistry.get(ctx.character.speciesId);
+    const sp2 = speciesRegistry.get(mate.speciesId);
+    const category = sp1 ? getSpeciesCategory(sp1.taxonomy) : 'small_mammal' as SpeciesCategory;
+    const humorCtx = {
+      name: ctx.character.name,
+      speciesName: sp1?.commonName ?? 'creature',
+      targetName: sp2?.commonName ?? 'creature',
+    };
+
+    if (encounter.outcome === 'death') {
+      // Kill the initiator
+      ctx.character.isAlive = false;
+      ctx.character.diedAtTick = ctx.tick;
+      ctx.character.causeOfDeath = `killed during cross-species encounter with ${sp2?.commonName ?? 'unknown'}`;
+
+      const funny = funnyNarrative(category, 'cross_breed_death', humorCtx);
+      return {
+        success: false,
+        narrative: funny ?? `${ctx.character.name} approached a ${sp2?.commonName ?? 'creature'} with romantic intentions. It ended badly.`,
+        effects: [{ type: 'damage_dealt', target: ctx.character.id, value: 999 }],
+        sensoryData: buildSensoryData(ctx),
+      };
+    }
+
+    if (encounter.outcome === 'rejection') {
+      const funny = funnyNarrative(category, 'cross_breed_reject', humorCtx);
+      return {
+        success: false,
+        narrative: funny ?? `The ${sp2?.commonName ?? 'creature'} showed no interest in ${ctx.character.name}'s advances.`,
+        effects: [],
+        sensoryData: buildSensoryData(ctx),
+      };
+    }
+
+    // success or new_species — proceed to breed
+  }
+
   const result = breed(ctx.character, mate, ctx.tick);
 
   if (!result) {
     const breedCheck = canBreed(ctx.character, mate);
+    const species = speciesRegistry.get(ctx.character.speciesId);
+    const category = species ? getSpeciesCategory(species.taxonomy) : 'small_mammal' as SpeciesCategory;
+    const funny = funnyNarrative(category, 'breeding_fail', {
+      name: ctx.character.name,
+      speciesName: species?.commonName ?? 'creature',
+    });
     return {
       success: false,
-      narrative: `Breeding fails: ${breedCheck.reason ?? 'conditions not met'}.`,
+      narrative: funny ?? `Breeding fails: ${breedCheck.reason ?? 'conditions not met'}.`,
       effects: [],
       sensoryData: buildSensoryData(ctx),
     };
@@ -603,6 +683,26 @@ function handleBreed(_action: AgentAction, ctx: ActionContext): ActionResult {
 
   const count = result.offspring.length;
   fameTracker.recordAchievement(ctx.character, 'Produced offspring', 3);
+
+  if (result.isHybrid) {
+    const sp1 = speciesRegistry.get(ctx.character.speciesId);
+    const sp2 = speciesRegistry.get(mate.speciesId);
+    const hybridSpecies = speciesRegistry.get(result.offspring[0]?.speciesId ?? '');
+    const category = sp1 ? getSpeciesCategory(sp1.taxonomy) : 'small_mammal' as SpeciesCategory;
+    const funny = funnyNarrative(category, 'cross_breed_success', {
+      name: ctx.character.name,
+      speciesName: sp1?.commonName ?? 'creature',
+      targetName: sp2?.commonName ?? 'creature',
+      hybridName: hybridSpecies?.commonName ?? 'hybrid',
+    });
+    fameTracker.recordAchievement(ctx.character, `Created hybrid species: ${hybridSpecies?.commonName ?? 'unknown'}`, 50);
+    return {
+      success: true,
+      narrative: funny ?? `A new hybrid species is born! The ${hybridSpecies?.commonName ?? 'hybrid'} enters the world.`,
+      effects: result.offspring.map(c => ({ type: 'birth', target: c.id, value: c.name })),
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
 
   return {
     success: true,
@@ -760,6 +860,45 @@ function handleInspect(action: AgentAction, ctx: ActionContext): ActionResult {
     narrative: `You inspect ${targetName} closely.`,
     effects: [],
     sensoryData: buildSensoryData(ctx, true),
+  };
+}
+
+function handlePropose(action: AgentAction, ctx: ActionContext): ActionResult {
+  const targetId = action.params.targetId as string;
+  const offer = (action.params.offer as string) ?? 'nothing';
+  const demand = (action.params.demand as string) ?? 'nothing';
+
+  // Find target
+  const target = targetId
+    ? ctx.nearbyCharacters.find(c => c.id === targetId)
+    : ctx.nearbyCharacters[0];
+
+  if (!target) {
+    return {
+      success: false,
+      narrative: `There is no one nearby to negotiate with.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const result = evaluateProposal(ctx.character, target, offer, demand);
+
+  if (result.accepted) {
+    // Create pact relationship
+    addBidirectionalRelationship(ctx.character, target, 'pact', 0.5);
+    modifyRelationshipStrength(ctx.character, target.id, 0.15);
+    modifyRelationshipStrength(target, ctx.character.id, 0.15);
+    fameTracker.recordAchievement(ctx.character, 'Diplomatic agreement', 5);
+  }
+
+  return {
+    success: result.accepted,
+    narrative: result.narrative,
+    effects: result.accepted
+      ? [{ type: 'relationship_change', target: ctx.character.id, value: 'pact' }]
+      : [],
+    sensoryData: buildSensoryData(ctx),
   };
 }
 

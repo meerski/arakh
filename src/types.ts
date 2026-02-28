@@ -205,6 +205,10 @@ export interface Character {
   fame: number;
   achievements: Achievement[];
   isGenesisElder: boolean;
+
+  // Politics
+  socialRank: number;           // 0-100, influence within group
+  loyalties: Map<CharacterId, number>; // loyalty strength toward leaders
 }
 
 export interface Genetics {
@@ -224,7 +228,7 @@ export interface Relationship {
   strength: number;          // -1 to 1
 }
 
-export type RelationshipType = 'friend' | 'rival' | 'mate' | 'mentor' | 'student' | 'ally' | 'enemy' | 'trade_partner';
+export type RelationshipType = 'friend' | 'rival' | 'mate' | 'mentor' | 'student' | 'ally' | 'enemy' | 'trade_partner' | 'pact';
 
 export interface Item {
   id: ItemId;
@@ -286,7 +290,7 @@ export interface Card {
   createdAt: Date;
 }
 
-export type CardRarity = 'genesis' | 'legendary' | 'rare' | 'uncommon' | 'common';
+export type CardRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythic';
 
 export interface CardHighlight {
   tick: number;
@@ -325,7 +329,8 @@ export type ActionType =
   | 'build' | 'craft' | 'gather'
   | 'communicate' | 'trade' | 'ally' | 'attack' | 'defend' | 'flee'
   | 'breed' | 'teach' | 'learn'
-  | 'experiment' | 'observe' | 'inspect';
+  | 'experiment' | 'observe' | 'inspect'
+  | 'propose';
 
 export interface ActionResult {
   success: boolean;
@@ -426,4 +431,25 @@ export interface NarrativeMessage {
 export interface ErrorMessage {
   code: string;
   message: string;
+}
+
+// --- Pacts & Diplomacy ---
+export interface Pact {
+  id: string;
+  proposerId: CharacterId;
+  targetId: CharacterId;
+  offer: string;
+  demand: string;
+  acceptedAtTick: number;
+  expiresAtTick: number | null;
+  broken: boolean;
+  brokenBy: CharacterId | null;
+}
+
+// --- Species Advancement ---
+export interface SpeciesAdvancement {
+  speciesId: SpeciesId;
+  regionId: RegionId;
+  domains: Record<string, number>;         // domain → tier 0-4
+  researchProgress: Record<string, number>; // domain → partial progress toward next tier
 }

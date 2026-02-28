@@ -5,6 +5,8 @@
 // Templates use {variable} placeholders filled by context.
 
 import { worldRNG } from '../simulation/random.js';
+import { funnyNarrative, getSpeciesCategory, type HumorEventType } from './humor.js';
+import { speciesRegistry } from '../species/species.js';
 
 export interface TemplateContext {
   name?: string;
@@ -24,7 +26,8 @@ export type TemplateCategory =
   | 'trade' | 'alliance' | 'migration' | 'starvation' | 'extinction'
   | 'first_contact' | 'breeding' | 'exploration' | 'crafting'
   | 'weather' | 'disaster' | 'achievement'
-  | 'tesla_moment' | 'speciation' | 'artifact' | 'anomaly' | 'era_change';
+  | 'tesla_moment' | 'speciation' | 'artifact' | 'anomaly' | 'era_change'
+  | 'breeding_fail' | 'politics' | 'advancement_fail' | 'betrayal' | 'exile' | 'diplomacy';
 
 const TEMPLATES: Record<TemplateCategory, string[]> = {
   birth: [
@@ -142,10 +145,66 @@ const TEMPLATES: Record<TemplateCategory, string[]> = {
     `The world enters {item}. What came before is now history.`,
     `{item} begins. The dominant force in the world has changed.`,
   ],
+  breeding_fail: [
+    `{name} attempted to breed, but conditions were not favorable.`,
+    `{name}'s courtship efforts went unrewarded.`,
+    `Breeding attempt failed for {name}: {cause}.`,
+  ],
+  politics: [
+    `{name} makes a political move within the {speciesName} hierarchy.`,
+    `Power shifts among the {speciesName}s. {name} is at the center.`,
+    `{name} challenges the established order.`,
+  ],
+  advancement_fail: [
+    `{name} the {speciesName} attempted to advance, but lacked the prerequisites.`,
+    `The {speciesName}s are not yet ready for this. {name} discovers limitations.`,
+  ],
+  betrayal: [
+    `{name} breaks a pact with {targetName}. Trust, once broken, is not easily restored.`,
+    `Betrayal! {name} turns against {targetName}. The consequences ripple outward.`,
+    `{name} the {speciesName} chose treachery. {targetName} will not forget.`,
+  ],
+  exile: [
+    `{name} has been exiled from the group. The wilderness awaits.`,
+    `The {speciesName}s cast out {name}. A solitary existence begins.`,
+    `{name} is banished. The colony speaks with one voice: leave.`,
+  ],
+  diplomacy: [
+    `{name} extends an offer to {targetName}. A deal is proposed.`,
+    `Negotiations between {name} and {targetName}. The terms are unusual.`,
+    `{name} the {speciesName} seeks an arrangement with {targetName}.`,
+  ],
 };
 
-/** Select and fill a template */
+/** Map template categories to humor event types */
+const CATEGORY_TO_HUMOR: Partial<Record<TemplateCategory, HumorEventType>> = {
+  death: 'death',
+  breeding: 'breeding_success',
+  breeding_fail: 'breeding_fail',
+  combat_win: 'combat',
+  combat_loss: 'combat',
+  exploration: 'exploration',
+  crafting: 'craft_fail',
+  politics: 'politics',
+  advancement_fail: 'advancement',
+  betrayal: 'cross_species',
+  diplomacy: 'cross_species',
+  exile: 'politics',
+};
+
+/** Select and fill a template — with humor injection */
 export function selectTemplate(category: TemplateCategory, context: TemplateContext): string {
+  // Try humor first
+  const humorType = CATEGORY_TO_HUMOR[category];
+  if (humorType && context.speciesId) {
+    const species = speciesRegistry.get(context.speciesId as string);
+    if (species) {
+      const speciesCategory = getSpeciesCategory(species.taxonomy);
+      const funny = funnyNarrative(speciesCategory, humorType, context);
+      if (funny) return funny;
+    }
+  }
+
   const templates = TEMPLATES[category];
   if (!templates || templates.length === 0) {
     return `Something happened involving ${context.name ?? 'someone'}.`;

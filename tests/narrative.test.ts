@@ -317,7 +317,7 @@ describe('Narrative & Cards Pipeline', () => {
     it('creates genesis card for genesis elders', () => {
       const char = makeChar(herbivoreId, { isGenesisElder: true } as any);
       const card = createCard(char, 'owner-1');
-      expect(card.rarity).toBe('genesis');
+      expect(card.rarity).toBe('mythic');
     });
 
     it('creates card with epitaph for dead characters', () => {
