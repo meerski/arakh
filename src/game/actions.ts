@@ -15,6 +15,7 @@ import { attemptDiscovery } from './exploration.js';
 import { characterRegistry } from '../species/registry.js';
 import { addBidirectionalRelationship, modifyRelationshipStrength } from './social.js';
 import { fameTracker } from './fame.js';
+import { speciesRegistry } from '../species/species.js';
 
 export interface ActionContext {
   character: Character;
@@ -762,6 +763,26 @@ function handleInspect(action: AgentAction, ctx: ActionContext): ActionResult {
   };
 }
 
+/** Patterns that indicate animal-based food */
+const ANIMAL_FOOD_PATTERN = /fish|salmon|tuna|herring|sardine|krill|shrimp|crab|shellfish|squid|insect|worm|carrion|meat|egg|prey|rodent|mammal|bird|tilapia|lobster|clam|mussel|oyster|octopus|seal|whale|deer|rabbit|snake|frog|lizard/i;
+/** Patterns that indicate plant-based food */
+const PLANT_FOOD_PATTERN = /grass|vegetation|berr|fruit|seed|algae|plankton|kelp|leaf|leaves|bark|root|nut|nectar|flower|fungi|bamboo|seagrass|lichen|moss|tuber|grain|millet|cacao|coffee|vanilla|palm|acacia|shea|gum|argan|rubber|coconut|mango|banana|papyrus|rice|wheat|sorghum|yam|cassava|taro|fern|herb/i;
+/** Water is universally relevant */
+const WATER_PATTERN = /water|fresh_water|spring|oasis|river|stream/i;
+
+/** Filter available resources to only what this species would notice */
+function filterResourcesByDiet(resources: string[], diet: string): string[] {
+  return resources.filter(r => {
+    if (WATER_PATTERN.test(r)) return true;
+    if (diet === 'carnivore') return ANIMAL_FOOD_PATTERN.test(r);
+    if (diet === 'herbivore') return PLANT_FOOD_PATTERN.test(r);
+    if (diet === 'omnivore') return ANIMAL_FOOD_PATTERN.test(r) || PLANT_FOOD_PATTERN.test(r);
+    if (diet === 'filter_feeder') return /plankton|krill|algae|seagrass/i.test(r);
+    if (diet === 'detritivore') return /carrion|fungi|worm|leaf|leaves|bark|moss|lichen|silt/i.test(r);
+    return false;
+  });
+}
+
 /** Build sensory data for the character — filtered through species perception */
 function buildSensoryData(ctx: ActionContext, enhanced: boolean = false): SensoryData {
   const nearby: EntitySighting[] = ctx.nearbyCharacters
@@ -772,6 +793,11 @@ function buildSensoryData(ctx: ActionContext, enhanced: boolean = false): Sensor
       behavior: worldRNG.pick(['resting', 'moving', 'feeding', 'alert', 'hunting']),
     }));
 
+  // Filter opportunities by species diet
+  const species = speciesRegistry.get(ctx.character.speciesId);
+  const diet = species?.traits.diet ?? 'omnivore';
+  const relevantResources = filterResourcesByDiet(ctx.availableResources, diet);
+
   return {
     surroundings: `You are in ${ctx.regionName}. The ${ctx.weather} ${ctx.season} ${ctx.timeOfDay} surrounds you.`,
     nearbyEntities: nearby,
@@ -779,6 +805,6 @@ function buildSensoryData(ctx: ActionContext, enhanced: boolean = false): Sensor
     timeOfDay: ctx.timeOfDay,
     season: ctx.season,
     threats: ctx.threats,
-    opportunities: ctx.availableResources.slice(0, 3),
+    opportunities: relevantResources.slice(0, 3),
   };
 }

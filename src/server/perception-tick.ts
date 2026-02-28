@@ -104,7 +104,7 @@ function buildPerceptionData(
   const surroundings = buildSurroundingsNarrative(region, weather, timeOfDay, season);
   const nearbyEntities = buildEntitySightings(character, region, perception, timeOfDay);
   const threats = buildThreats(character, region, perception);
-  const opportunities = buildOpportunities(region, perception);
+  const opportunities = buildOpportunities(character, region, perception);
 
   return {
     surroundings,
@@ -327,15 +327,55 @@ function buildThreats(
   return threats;
 }
 
+/** Patterns that indicate animal-based food (carnivore/omnivore relevant) */
+const ANIMAL_FOOD_PATTERNS = /fish|salmon|tuna|herring|sardine|krill|shrimp|crab|shellfish|squid|insect|worm|carrion|meat|egg|prey|rodent|mammal|bird|tilapia|lobster|clam|mussel|oyster|octopus|seal|whale|deer|rabbit|snake|frog|lizard/i;
+
+/** Patterns that indicate plant-based food (herbivore/omnivore relevant) */
+const PLANT_FOOD_PATTERNS = /grass|vegetation|berr|fruit|seed|algae|plankton|kelp|leaf|leaves|bark|root|nut|nectar|flower|fungi|bamboo|seagrass|lichen|moss|tuber|grain|millet|cacao|coffee|vanilla|palm|acacia|shea|gum|argan|rubber|coconut|mango|banana|papyrus|rice|wheat|sorghum|yam|cassava|taro|fern|herb/i;
+
+/** Patterns for water sources (relevant to all species) */
+const WATER_PATTERNS = /water|fresh_water|spring|oasis|river|stream/i;
+
+/** Patterns for materials only intelligent species would notice */
+const MATERIAL_PATTERNS = /wood|hardwood|rosewood|cedar|stone|iron|copper|clay|flint|obsidian|sulfur|salt|gem|gold|silver|diamond|sapphire|phosphate|marble|granite|sand|silt|coral|amber|jade|tin|coal|oil|crystal/i;
+
+/** Check if a resource is relevant to a species based on diet */
+function isResourceRelevant(resourceType: string, diet: string, intelligence: number): boolean {
+  // Water is universally relevant
+  if (WATER_PATTERNS.test(resourceType)) return true;
+
+  if (diet === 'carnivore') {
+    return ANIMAL_FOOD_PATTERNS.test(resourceType);
+  }
+  if (diet === 'herbivore') {
+    return PLANT_FOOD_PATTERNS.test(resourceType);
+  }
+  if (diet === 'omnivore') {
+    if (ANIMAL_FOOD_PATTERNS.test(resourceType) || PLANT_FOOD_PATTERNS.test(resourceType)) return true;
+    return intelligence > 60 && MATERIAL_PATTERNS.test(resourceType);
+  }
+  if (diet === 'filter_feeder') {
+    return /plankton|krill|algae|seagrass/i.test(resourceType);
+  }
+  if (diet === 'detritivore') {
+    return /carrion|fungi|worm|leaf|leaves|bark|moss|lichen|silt/i.test(resourceType);
+  }
+  return false;
+}
+
 /**
  * Build opportunity descriptions based on available resources,
- * limited by perception range.
+ * filtered by species biology and limited by perception range.
  */
 function buildOpportunities(
+  character: Character,
   region: Region,
   perception: PerceptionProfile,
 ): string[] {
   const opportunities: string[] = [];
+  const species = speciesRegistry.get(character.speciesId);
+  const diet = species?.traits.diet ?? 'omnivore';
+  const intelligence = species?.traits.intelligence ?? 50;
 
   // Number of opportunities visible depends on perception
   const maxVisible = Math.ceil(perception.visualRange / 25);
@@ -343,6 +383,7 @@ function buildOpportunities(
   for (const resource of region.resources) {
     if (opportunities.length >= maxVisible) break;
     if (resource.quantity <= 0) continue;
+    if (!isResourceRelevant(resource.type, diet, intelligence)) continue;
 
     const abundanceDesc = resource.quantity > resource.maxQuantity * 0.7
       ? 'abundant'
@@ -351,6 +392,15 @@ function buildOpportunities(
         : 'scarce traces of';
 
     opportunities.push(`${abundanceDesc} ${resource.type} available nearby`);
+  }
+
+  // Smell-based hints: carnivores/omnivores might sense prey nearby
+  if ((diet === 'carnivore' || diet === 'omnivore') && perception.smellRange > 40) {
+    const preyInRegion = characterRegistry.getByRegion(region.id)
+      .filter(c => c.id !== character.id && c.isAlive);
+    if (preyInRegion.length > 0 && opportunities.length < maxVisible) {
+      opportunities.push('the scent of prey carries on the current');
+    }
   }
 
   // Hidden locations can be hinted at with high perception
