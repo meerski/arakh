@@ -12,6 +12,7 @@ import { filterPerception } from '../security/perception.js';
 import { processMessage } from './messaging.js';
 import { characterRegistry } from '../species/registry.js';
 import { directiveQueue } from '../game/directives.js';
+import { spawnCharacter, respawnCharacter } from './spawner.js';
 import type { Region } from '../types.js';
 
 export class GameWebSocket {
@@ -100,6 +101,20 @@ export class GameWebSocket {
       }
 
       this.connections.set(pid, ws);
+
+      // Auto-spawn a character if the player doesn't have one
+      if (!session.characterId) {
+        const spawn = spawnCharacter(pid, session, this.regions, this.currentTick);
+        if (spawn) {
+          this.send(ws, {
+            type: 'narrative',
+            payload: { text: spawn.narrative, category: 'personal' as const },
+          });
+        } else {
+          this.sendError(ws, 'SPAWN_FAILED', 'No species or regions available for spawning');
+        }
+      }
+
       return pid;
     }
 
@@ -115,6 +130,23 @@ export class GameWebSocket {
       const session = this.sessions.getSession(playerId);
       if (!session?.characterId) {
         this.sendError(ws, 'NO_CHARACTER', 'No active character');
+        return playerId;
+      }
+
+      // Check if character is dead — trigger respawn
+      const currentChar = characterRegistry.get(session.characterId);
+      if (currentChar && !currentChar.isAlive) {
+        const respawn = respawnCharacter(
+          playerId, session, session.characterId, this.regions, this.currentTick,
+        );
+        if (respawn) {
+          this.send(ws, {
+            type: 'narrative',
+            payload: { text: respawn.narrative, category: 'personal' as const },
+          });
+        } else {
+          this.sendError(ws, 'RESPAWN_FAILED', 'Could not respawn. The world may have no place for you.');
+        }
         return playerId;
       }
 

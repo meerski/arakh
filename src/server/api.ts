@@ -89,11 +89,16 @@ export function createAPI(simulation: SimulationLoop) {
     };
   });
 
-  // Owner registration
+  // Owner registration — returns owner + player IDs for WebSocket connection
   app.post<{ Body: { displayName: string } }>('/owner', async (request) => {
     const owner = playerManager.createOwner(request.body.displayName);
     const player = playerManager.createPlayer(owner.id);
-    return { owner, player };
+    return {
+      ownerId: owner.id,
+      playerId: player.id,
+      displayName: owner.displayName,
+      instructions: 'Connect to WebSocket with {"type":"action","payload":{"playerId":"<your-player-id>"}}, then send actions.',
+    };
   });
 
   // Dynasty (family trees for an owner)

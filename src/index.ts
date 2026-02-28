@@ -15,6 +15,7 @@ import { initializePopulation } from './species/population.js';
 import { generateHiddenLocations } from './game/exploration.js';
 import { seedTaxonomy } from './data/taxonomy/seed.js';
 import { seedRegions } from './data/earth/seed.js';
+import { broadcastPerceptionTicks } from './server/perception-tick.js';
 import type { World, Region, SpeciesId } from './types.js';
 import type { EcosystemState } from './simulation/ecosystem.js';
 
@@ -52,20 +53,6 @@ async function main() {
     tickIntervalMs: 1000,
   });
 
-  // Register broadcast handler
-  simulation.onTick((result) => {
-    const broadcasts = newsBroadcast.processTick(result);
-    for (const b of broadcasts) {
-      liveFeed.addBroadcast(b.text, result.tick);
-    }
-    for (const event of result.events) {
-      liveFeed.addEvent(event);
-    }
-  });
-
-  simulation.start();
-  console.log('Simulation started (1 tick/second)');
-
   // 7. Start REST API
   const api = createAPI(simulation);
   const sessions = new SessionManager();
@@ -78,8 +65,52 @@ async function main() {
 
   // 8. Start WebSocket
   const rawServer = api.server;
-  const ws = new GameWebSocket(rawServer, sessions);
+  const gameWs = new GameWebSocket(rawServer, sessions);
   console.log('WebSocket server ready');
+
+  // Register tick handler — broadcasts, world state sync, perception ticks
+  simulation.onTick((result) => {
+    const w = simulation.getWorld();
+    const time = w.time;
+    const timeOfDay = time.isDay ? (time.hour < 10 ? 'morning' : time.hour < 14 ? 'noon' : 'afternoon') : (time.hour < 6 ? 'night' : 'dusk');
+    const weather = w.regions.values().next().value?.climate ? 'clear' : 'clear';
+
+    // Sync world state to WebSocket handler
+    gameWs.updateWorldState(w.regions, result.tick, timeOfDay, time.season, weather);
+
+    // Broadcast perception data to connected agents
+    broadcastPerceptionTicks(
+      sessions,
+      (playerId, message) => gameWs.sendToPlayer(playerId, message),
+      w.regions,
+      result.tick,
+      timeOfDay,
+      time.season,
+      weather,
+    );
+
+    // News broadcast + live feed
+    const broadcasts = newsBroadcast.processTick(result);
+    for (const b of broadcasts) {
+      liveFeed.addBroadcast(b.text, result.tick);
+    }
+    for (const event of result.events) {
+      liveFeed.addEvent(event);
+    }
+
+    // Broadcast breaking events to all connected agents
+    for (const event of result.events) {
+      if (event.level !== 'personal') {
+        gameWs.broadcast({
+          type: 'event',
+          payload: event,
+        });
+      }
+    }
+  });
+
+  simulation.start();
+  console.log('Simulation started (1 tick/second)');
 
   // Count populations
   let totalPop = 0;
