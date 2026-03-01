@@ -253,8 +253,9 @@ describe('Catastrophe System', () => {
       ];
 
       let foundDisease = false;
-      // Run 20 checks to increase chance of RNG success
-      for (let i = 0; i < 20; i++) {
+      // Run 200 checks — P(miss all) = 0.95^200 ≈ 0.00004
+      for (let i = 0; i < 200; i++) {
+        catastropheEngine.clear(); // clear so region isn't blocked by prior catastrophe
         const stress = catastropheEngine.calculateStress(region, ecosystem);
         const catastrophe = catastropheEngine.checkCatastropheTriggers(region, stress, 100 + i);
         if (catastrophe && catastrophe.type === 'disease_outbreak') {
@@ -285,7 +286,9 @@ describe('Catastrophe System', () => {
       ];
 
       let foundFlood = false;
-      for (let i = 0; i < 20; i++) {
+      // Run 200 checks — P(miss all) = 0.92^200 ≈ 0.0000001
+      for (let i = 0; i < 200; i++) {
+        catastropheEngine.clear(); // clear so region isn't blocked by prior catastrophe
         const stress = catastropheEngine.calculateStress(region, ecosystem);
         const catastrophe = catastropheEngine.checkCatastropheTriggers(region, stress, 100 + i);
         if (catastrophe && (catastrophe.type === 'flood' || catastrophe.type === 'landslide')) {
@@ -302,7 +305,8 @@ describe('Catastrophe System', () => {
     // -------------------------------------------------------
     it('can trigger forest fire when deforestation is moderate and humidity is low', () => {
       let foundFire = false;
-      for (let i = 0; i < 50; i++) {
+      // Run 200 checks — P(miss all) = 0.96^200 ≈ 0.0003
+      for (let i = 0; i < 200; i++) {
         catastropheEngine.clear();
         const region = makeRegion('grassland');
         region.climate.pollution = 0.1;
