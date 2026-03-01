@@ -229,7 +229,7 @@ describe('Action System', () => {
       let attacked = false;
       for (let i = 0; i < 30; i++) {
         opponent.health = initialHealth;
-        const result = processAction({ type: 'attack', params: {}, timestamp: 0 }, ctx);
+        const result = processAction({ type: 'attack', params: { targetId: opponent.id }, timestamp: 0 }, ctx);
         if (result.success) {
           attacked = true;
           expect(opponent.health).toBeLessThan(initialHealth);

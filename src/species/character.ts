@@ -9,6 +9,10 @@ import type {
 import { worldRNG } from '../simulation/random.js';
 import { speciesRegistry } from './species.js';
 import { calculateOffspringGenetics } from './genetics.js';
+import { corpseRegistry } from '../simulation/corpses.js';
+import { domesticationRegistry } from '../game/domestication.js';
+import { characterRegistry } from './registry.js';
+import { mainCharacterManager } from '../game/main-character.js';
 
 export function createCharacter(params: {
   speciesId: SpeciesId;
@@ -50,6 +54,7 @@ export function createCharacter(params: {
     health: 1,
     energy: 1,
     hunger: 0,
+    stamina: 1,
     lastBreedingTick: null,
     gestationEndsAtTick: null,
     relationships: [],
@@ -62,6 +67,9 @@ export function createCharacter(params: {
     isGenesisElder: params.isGenesisElder ?? false,
     socialRank: params.isGenesisElder ? 50 : 0,
     loyalties: new Map(),
+    role: 'none',
+    characterClass: params.isGenesisElder ? 'main' : 'regular',
+    impactScore: 0,
   };
 }
 
@@ -165,12 +173,17 @@ export function updateCharacterTick(character: Character, tick: number): {
   // Age
   character.age = tick - character.bornAtTick;
 
-  // Natural needs — metabolic rate scales inversely with size and lifespan
-  // Small, fast species get hungry quicker; large, slow species are more efficient
-  const sizeEff = species.traits.size > 0 ? species.traits.size : 10;
-  const metabolicRate = Math.max(0.3, Math.min(3.0, 50 / sizeEff));
+  // Natural needs — use species metabolic rate (from taxonomy)
+  const metabolicRate = species.traits.metabolicRate ?? 1.0;
   character.hunger = Math.min(1, character.hunger + 0.001 * metabolicRate);
-  character.energy = Math.max(0, character.energy - 0.0005 * metabolicRate);
+
+  // Servants in forced domestication drain energy 10% faster
+  const servantBond = domesticationRegistry.getBondForServant(character.id);
+  const servantDrain = servantBond && servantBond.type === 'enslavement' ? 1.1 : 1.0;
+  character.energy = Math.max(0, character.energy - 0.0005 * metabolicRate * servantDrain);
+
+  // Stamina drain (recovers during rest actions, drains with activity)
+  character.stamina = Math.max(0, character.stamina - 0.0003 * metabolicRate);
 
   // Starvation
   if (character.hunger >= 1) {
@@ -196,18 +209,18 @@ export function updateCharacterTick(character: Character, tick: number): {
   if (character.age >= effectiveLifespan) {
     const deathChance = (character.age - effectiveLifespan) / (effectiveLifespan * 0.2);
     if (worldRNG.chance(Math.min(0.5, deathChance))) {
-      character.isAlive = false;
-      character.diedAtTick = tick;
-      character.causeOfDeath = 'old age';
+      characterRegistry.markDead(character.id, tick, 'old age');
+      corpseRegistry.createCorpse(character, tick);
+      mainCharacterManager.processMainCharacterDeath(character, 'current');
       return { died: true, causeOfDeath: 'old age' };
     }
   }
 
   // Death from health depletion
   if (character.health <= 0) {
-    character.isAlive = false;
-    character.diedAtTick = tick;
-    character.causeOfDeath = 'health depletion';
+    characterRegistry.markDead(character.id, tick, 'health depletion');
+    corpseRegistry.createCorpse(character, tick);
+    mainCharacterManager.processMainCharacterDeath(character, 'current');
     return { died: true, causeOfDeath: 'health depletion' };
   }
 

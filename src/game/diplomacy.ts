@@ -8,6 +8,9 @@ import { canCommunicate } from './language.js';
 import { getGeneValue } from '../species/character.js';
 import { speciesRegistry } from '../species/species.js';
 import { modifyRelationshipStrength } from './social.js';
+import { getEcosystem, getPredatorsOf } from '../simulation/ecosystem.js';
+import { trustLedger } from './trust.js';
+import { betrayalRegistry } from './betrayal.js';
 
 export interface ProposalResult {
   accepted: boolean;
@@ -69,6 +72,27 @@ export function evaluateProposal(
   // Cross-species proposals are harder
   if (proposer.speciesId !== target.speciesId) {
     acceptChance *= 0.7;
+  }
+
+  // Trust modifier — inter-family trust affects proposals
+  const trustScore = trustLedger.getTrust(target.familyTreeId, proposer.familyTreeId);
+  acceptChance += trustScore * 0.15;
+
+  // Betrayal reputation penalty
+  const betrayalRep = betrayalRegistry.getBetrayalReputation(proposer.familyTreeId);
+  acceptChance -= betrayalRep * 0.3;
+
+  // Alliance proposals get bonus if common threat exists
+  if (offer === 'alliance' || demand === 'alliance') {
+    const ecosystem = getEcosystem();
+    if (ecosystem) {
+      const proposerPredators = getPredatorsOf(ecosystem, proposer.speciesId).map(e => e.predatorId);
+      const targetPredators = getPredatorsOf(ecosystem, target.speciesId).map(e => e.predatorId);
+      const commonThreats = proposerPredators.filter(p => targetPredators.includes(p));
+      if (commonThreats.length > 0) {
+        acceptChance += 0.2; // Common enemy bonus
+      }
+    }
   }
 
   acceptChance = Math.max(0.05, Math.min(0.95, acceptChance));
@@ -155,9 +179,14 @@ export class PactRegistry {
     return Array.from(this.pacts.values());
   }
 
+  restore(pact: Pact): void {
+    this.pacts.set(pact.id, pact);
+  }
+
   clear(): void {
     this.pacts.clear();
   }
 }
 
-export const pactRegistry = new PactRegistry();
+export let pactRegistry = new PactRegistry();
+export function _installPactRegistry(instance: PactRegistry): void { pactRegistry = instance; }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Gamemaster, gamemasters } from '../src/broadcast/gamemaster.js';
+import { Gamemaster, gamemasters, _installGamemasters } from '../src/broadcast/gamemaster.js';
 import { NewsBroadcast } from '../src/broadcast/news.js';
 import { LiveFeed } from '../src/dashboard/feed.js';
 import { getWorldStats, getSpeciesRankings } from '../src/dashboard/stats.js';
@@ -41,6 +41,7 @@ function makeTickResult(overrides: Partial<TickResult> = {}): TickResult {
     births: [],
     deaths: [],
     discoveries: [],
+    actionResults: [],
     ...overrides,
   };
 }
@@ -125,13 +126,18 @@ describe('Phase 8 — Broadcast & Human Experience', () => {
 
   // --- News Broadcast ---
   describe('News Broadcast', () => {
+    beforeEach(() => {
+      // Reset global gamemasters to fresh instances
+      _installGamemasters([new Gamemaster('Chronos'), new Gamemaster('Gaia')]);
+    });
+
     it('processes tick through all gamemasters', () => {
       const news = new NewsBroadcast();
       const result = makeTickResult({
-        events: [makeEvent({ level: 'continental', description: 'Plague spreads!' })],
+        events: [makeEvent({ level: 'global', type: 'extinction', description: 'Plague spreads!' })],
       });
       const messages = news.processTick(result);
-      // Both gamemasters should pick up continental event
+      // Both gamemasters should pick up global extinction event
       expect(messages.length).toBeGreaterThanOrEqual(2);
     });
 
@@ -157,7 +163,7 @@ describe('Phase 8 — Broadcast & Human Experience', () => {
       const news = new NewsBroadcast();
       expect(news.getFeedSize()).toBe(0);
       news.processTick(makeTickResult({
-        events: [makeEvent({ level: 'global' })],
+        events: [makeEvent({ level: 'global', type: 'extinction' })],
       }));
       expect(news.getFeedSize()).toBeGreaterThan(0);
     });
@@ -184,7 +190,7 @@ describe('Phase 8 — Broadcast & Human Experience', () => {
 
     it('adds broadcast messages', () => {
       const feed = new LiveFeed();
-      feed.addBroadcast('BREAKING NEWS: Meteor!', 500);
+      feed.addBroadcastText('BREAKING NEWS: Meteor!', 500);
       const items = feed.getAll();
       expect(items).toHaveLength(1);
       expect(items[0].type).toBe('broadcast');
@@ -206,7 +212,7 @@ describe('Phase 8 — Broadcast & Human Experience', () => {
     it('limits feed size', () => {
       const feed = new LiveFeed();
       for (let i = 0; i < 20; i++) {
-        feed.addBroadcast(`Message ${i}`, i);
+        feed.addBroadcastText(`Message ${i}`, i);
       }
       const items = feed.getAll(5);
       expect(items).toHaveLength(5);

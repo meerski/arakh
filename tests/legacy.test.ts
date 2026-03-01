@@ -118,6 +118,9 @@ describe('Legacy & Death Processing', () => {
         generations: 2,
         members: [parent.id, weakChild.id, strongChild.id],
         isExtinct: false,
+        tier: 'individual',
+        populationGenome: null,
+        populationCount: 3,
       };
 
       const result = processCharacterDeath(parent, tree, [weakChild, strongChild]);
@@ -138,6 +141,9 @@ describe('Legacy & Death Processing', () => {
         generations: 1,
         members: [parent.id],
         isExtinct: false,
+        tier: 'individual',
+        populationGenome: null,
+        populationCount: 1,
       };
 
       const result = processCharacterDeath(parent, tree, []);

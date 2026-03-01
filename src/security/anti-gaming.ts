@@ -88,6 +88,52 @@ export class AntiGamingSystem {
 
     return Math.min(1, score);
   }
+
+  /**
+   * Detect collusion: multiple agents from different species performing
+   * identical action sequences in the same region within a short window.
+   */
+  analyzeCollusion(playerActions: { playerId: PlayerId; speciesId: string; regionId: string; actions: string[] }[]): PlayerId[] {
+    const flagged: PlayerId[] = [];
+
+    // Group by region
+    const byRegion = new Map<string, typeof playerActions>();
+    for (const entry of playerActions) {
+      const list = byRegion.get(entry.regionId) ?? [];
+      list.push(entry);
+      byRegion.set(entry.regionId, list);
+    }
+
+    for (const [_regionId, regionPlayers] of byRegion) {
+      if (regionPlayers.length < 2) continue;
+
+      // Compare action sequences between different species
+      for (let i = 0; i < regionPlayers.length; i++) {
+        for (let j = i + 1; j < regionPlayers.length; j++) {
+          const a = regionPlayers[i];
+          const b = regionPlayers[j];
+          if (a.speciesId === b.speciesId) continue; // Same species isn't suspicious
+
+          // Check for identical action sequences
+          const seqA = a.actions.slice(-10).join(',');
+          const seqB = b.actions.slice(-10).join(',');
+          if (seqA === seqB && a.actions.length >= 5) {
+            flagged.push(a.playerId, b.playerId);
+
+            // Increase noise for flagged players
+            const profA = this.profiles.get(a.playerId);
+            const profB = this.profiles.get(b.playerId);
+            if (profA) profA.patternScore = Math.min(1, profA.patternScore + 0.3);
+            if (profB) profB.patternScore = Math.min(1, profB.patternScore + 0.3);
+          }
+        }
+      }
+    }
+
+    return [...new Set(flagged)];
+  }
 }
 
-export const antiGaming = new AntiGamingSystem();
+export let antiGaming = new AntiGamingSystem();
+
+export function _installAntiGaming(instance: AntiGamingSystem): void { antiGaming = instance; }

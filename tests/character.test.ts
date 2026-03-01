@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createCharacter, updateCharacterTick, getGeneValue } from '../src/species/character.js';
 import { SpeciesRegistry } from '../src/species/species.js';
 import { speciesRegistry } from '../src/species/species.js';
+import { characterRegistry } from '../src/species/registry.js';
 
 describe('Character', () => {
   let speciesId: string;
@@ -39,6 +40,7 @@ describe('Character', () => {
       familyTreeId: 'test-tree' as any,
       tick: 0,
     });
+    characterRegistry.add(char);
 
     // Simulate well past lifespan
     let died = false;

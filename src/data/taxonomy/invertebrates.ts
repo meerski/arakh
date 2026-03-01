@@ -22,7 +22,7 @@ export function seedInvertebrates(): void {
       aquatic: true, habitat: ['underwater'], size: 10,
       lifespan: 864, speed: 5, strength: 5, intelligence: 1,
       diet: 'carnivore', socialStructure: 'solitary',
-      reproductionRate: 80,
+      reproductionRate: 80, metabolicRate: 0.5,
       perception: { visualRange: 5, hearingRange: 5, smellRange: 10, echolocation: false, electroreception: false, thermalSensing: false },
     },
   });
@@ -34,7 +34,7 @@ export function seedInvertebrates(): void {
       aquatic: true, habitat: ['underwater'], size: 8,
       lifespan: 8640, speed: 3, strength: 10, intelligence: 1,
       diet: 'omnivore', socialStructure: 'solitary',
-      reproductionRate: 40,
+      reproductionRate: 40, metabolicRate: 0.3,
       perception: { visualRange: 5, hearingRange: 5, smellRange: 15, echolocation: false, electroreception: false, thermalSensing: false },
     },
   });
@@ -45,7 +45,7 @@ export function seedInvertebrates(): void {
     traits: {
       size: 4, lifespan: 518, speed: 55, strength: 20,
       intelligence: 2, diet: 'carnivore', habitat: ['surface', 'underground'],
-      socialStructure: 'solitary', reproductionRate: 15, nocturnal: true,
+      socialStructure: 'solitary', reproductionRate: 15, nocturnal: true, metabolicRate: 2.5,
       perception: { visualRange: 10, hearingRange: 15, smellRange: 40, echolocation: false, electroreception: false, thermalSensing: false },
     },
   });
@@ -57,7 +57,7 @@ export function seedInvertebrates(): void {
       aquatic: true, habitat: ['underwater'], size: 1,
       lifespan: 52, speed: 25, strength: 2, intelligence: 1,
       diet: 'filter_feeder', socialStructure: 'herd',
-      reproductionRate: 200,
+      reproductionRate: 200, metabolicRate: 2.0,
       perception: { visualRange: 5, hearingRange: 5, smellRange: 10, echolocation: false, electroreception: false, thermalSensing: false },
     },
   });
@@ -69,7 +69,7 @@ export function seedInvertebrates(): void {
       aquatic: true, habitat: ['underwater', 'surface'], size: 18,
       lifespan: 17280, speed: 10, strength: 20, intelligence: 2,
       diet: 'omnivore', socialStructure: 'solitary',
-      reproductionRate: 20,
+      reproductionRate: 20, metabolicRate: 0.4,
       perception: { visualRange: 15, hearingRange: 5, smellRange: 20, echolocation: false, electroreception: false, thermalSensing: false },
     },
   });
@@ -80,7 +80,7 @@ export function seedInvertebrates(): void {
     traits: {
       size: 1, lifespan: 259, speed: 10, strength: 5,
       intelligence: 1, diet: 'detritivore', habitat: ['surface', 'underground'],
-      socialStructure: 'colony', reproductionRate: 30, nocturnal: true,
+      socialStructure: 'colony', reproductionRate: 30, nocturnal: true, metabolicRate: 1.5,
       perception: { visualRange: 5, hearingRange: 5, smellRange: 20, echolocation: false, electroreception: false, thermalSensing: false },
     },
   });

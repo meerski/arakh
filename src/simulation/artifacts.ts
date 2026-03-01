@@ -68,7 +68,7 @@ const ARTIFACT_EFFECTS: Record<ArtifactType, ArtifactEffect[]> = {
   prison: [{ type: 'danger_aura', magnitude: 0.6, targetScope: 'region' }],
 };
 
-class ArtifactRegistry {
+export class ArtifactRegistry {
   private artifacts: Map<string, Artifact> = new Map();
 
   /** Spawn a new artifact in a region */
@@ -143,7 +143,8 @@ class ArtifactRegistry {
   }
 }
 
-export const artifactRegistry = new ArtifactRegistry();
+export let artifactRegistry = new ArtifactRegistry();
+export function _installArtifactRegistry(instance: ArtifactRegistry): void { artifactRegistry = instance; }
 
 // ============================================================
 // Radiation Zones
@@ -158,7 +159,7 @@ export interface RadiationZone {
   mutationBonus: number;   // Extra mutation chance
 }
 
-class RadiationTracker {
+export class RadiationTracker {
   private zones: Map<string, RadiationZone> = new Map();
 
   /** Create a radiation zone */
@@ -209,7 +210,8 @@ class RadiationTracker {
   }
 }
 
-export const radiationTracker = new RadiationTracker();
+export let radiationTracker = new RadiationTracker();
+export function _installRadiationTracker(instance: RadiationTracker): void { radiationTracker = instance; }
 
 // ============================================================
 // Dimensional Anomalies
@@ -255,7 +257,7 @@ const ANOMALY_DESCRIPTIONS: Record<AnomalyType, string[]> = {
   ],
 };
 
-class AnomalyTracker {
+export class AnomalyTracker {
   private anomalies: Map<string, Anomaly> = new Map();
 
   /** Create an anomaly */
@@ -303,7 +305,8 @@ class AnomalyTracker {
   }
 }
 
-export const anomalyTracker = new AnomalyTracker();
+export let anomalyTracker = new AnomalyTracker();
+export function _installAnomalyTracker(instance: AnomalyTracker): void { anomalyTracker = instance; }
 
 // ============================================================
 // Event Generators — spawn artifacts, radiation, anomalies

@@ -8,21 +8,30 @@ import type {
 } from '../types.js';
 import { worldRNG } from './random.js';
 
-export function createGameTime(tick: number): GameTime {
-  // ~1 in-game year per real-world day
-  // At 1 tick/second: 86400 ticks/day = 1 year
-  const TICKS_PER_YEAR = 86400;
-  const TICKS_PER_DAY = TICKS_PER_YEAR / 365;
-  const TICKS_PER_HOUR = TICKS_PER_DAY / 24;
+// --- Time Constants ---
+// 1 tick = 30 in-game minutes. ~5 years/day at 1 tick/second.
+export const TICKS_PER_HOUR = 2;
+export const TICKS_PER_DAY = 48;
+export const TICKS_PER_YEAR = 17520;  // 365 * 48
 
+// Tiered processing intervals
+export const TICK_FAST = 1;           // Every tick (1s real)
+export const TICK_SLOW = 30;          // Every 30 ticks (30s real, ~15 in-game hours)
+export const TICK_EPOCH = 600;        // Every 600 ticks (10min real, ~12.5 in-game days)
+
+// Gestation cap: 14400 ticks = 4 real hours for all species
+export const MAX_GESTATION_TICKS = 14400;
+
+export function createGameTime(tick: number): GameTime {
   const year = Math.floor(tick / TICKS_PER_YEAR);
   const dayOfYear = Math.floor((tick % TICKS_PER_YEAR) / TICKS_PER_DAY);
-  const hour = Math.floor((tick % TICKS_PER_DAY) / TICKS_PER_HOUR);
+  const hourFloat = ((tick % TICKS_PER_DAY) / TICKS_PER_HOUR);
+  const hour = Math.floor(hourFloat);
 
   const seasonIndex = Math.floor(dayOfYear / 91.25);
   const seasons: GameTime['season'][] = ['spring', 'summer', 'autumn', 'winter'];
 
-  // Lunar cycle: ~29.5 days = ~29.5 * TICKS_PER_DAY ticks
+  // Lunar cycle: ~29.5 days
   const lunarCycleTicks = 29.5 * TICKS_PER_DAY;
   const lunarProgress = (tick % lunarCycleTicks) / lunarCycleTicks;
   const lunarPhases: GameTime['lunarPhase'][] = [
@@ -31,6 +40,11 @@ export function createGameTime(tick: number): GameTime {
   ];
   const lunarIndex = Math.floor(lunarProgress * 8);
 
+  // Continuous light level: sinusoidal curve, 0 at midnight, 1 at noon
+  // hourFloat ranges 0-24; peak at 12, trough at 0/24
+  const lightLevel = Math.max(0, Math.sin((hourFloat / 24) * Math.PI));
+  const isDay = lightLevel > 0.2;  // ~5am to ~7pm
+
   return {
     tick,
     year,
@@ -38,7 +52,8 @@ export function createGameTime(tick: number): GameTime {
     hour,
     season: seasons[seasonIndex] ?? 'spring',
     lunarPhase: lunarPhases[lunarIndex] ?? 'new',
-    isDay: hour >= 6 && hour < 20,
+    isDay,
+    lightLevel,
   };
 }
 
@@ -74,6 +89,7 @@ export function createRegion(params: {
     connections: [],
     hiddenLocations: [],
     populations: [],
+    plantPopulations: [],
   };
 }
 

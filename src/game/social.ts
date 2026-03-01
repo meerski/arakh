@@ -18,6 +18,9 @@ const RELATIONSHIP_MIRRORS: Record<string, ExtendedRelationshipType> = {
   enemy: 'enemy',
   trade_partner: 'trade_partner',
   kin: 'kin',
+  master: 'servant',
+  servant: 'master',
+  symbiont: 'symbiont',
 };
 
 export function addRelationship(
@@ -227,4 +230,5 @@ export class SocialGraph {
 }
 
 /** Singleton social graph instance */
-export const socialGraph = new SocialGraph();
+export let socialGraph = new SocialGraph();
+export function _installSocialGraph(instance: SocialGraph): void { socialGraph = instance; }

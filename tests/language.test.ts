@@ -19,6 +19,19 @@ describe('Language & Communication', () => {
     return sp.id;
   }
 
+  function getOrCreateSpeciesFull(name: string, cls: string, order: string, family: string, genus: string) {
+    const existing = speciesRegistry.getByName(name);
+    if (existing) return existing.id;
+    const sp = speciesRegistry.register({
+      commonName: name,
+      scientificName: `Testus ${name.toLowerCase()}`,
+      taxonomy: { class: cls, order, family, genus, species: name.slice(0, 2) },
+      tier: 'flagship',
+      traitOverrides: { lifespan: 5000 },
+    });
+    return sp.id;
+  }
+
   describe('canCommunicate', () => {
     it('same species communicate freely', () => {
       const spId = getOrCreateSpecies('LangTestA', 'LG', 'LF');
@@ -49,9 +62,20 @@ describe('Language & Communication', () => {
       expect(result.clarity).toBe(0.2);
     });
 
-    it('unrelated species cannot communicate', () => {
-      const spA = getOrCreateSpecies('LangUnrelA', 'UGA', 'UFA');
-      const spB = getOrCreateSpecies('LangUnrelB', 'UGB', 'UFB');
+    it('same class has minimal communication', () => {
+      const spA = getOrCreateSpeciesFull('LangSameClassA', 'M', 'OrderX', 'UFA', 'UGA');
+      const spB = getOrCreateSpeciesFull('LangSameClassB', 'M', 'OrderY', 'UFB', 'UGB');
+      const a = createCharacter({ speciesId: spA, regionId: 'r1' as any, familyTreeId: 't1' as any, tick: 0 });
+      const b = createCharacter({ speciesId: spB, regionId: 'r1' as any, familyTreeId: 't1' as any, tick: 0 });
+      const result = canCommunicate(a, b);
+      // Same class 'M', different orders → canTalk true with very low clarity (0.02)
+      expect(result.canTalk).toBe(true);
+      expect(result.clarity).toBeCloseTo(0.02);
+    });
+
+    it('different class species cannot communicate', () => {
+      const spA = getOrCreateSpeciesFull('LangDiffClassA', 'ClassA', 'OA', 'FA', 'GA');
+      const spB = getOrCreateSpeciesFull('LangDiffClassB', 'ClassB', 'OB', 'FB', 'GB');
       const a = createCharacter({ speciesId: spA, regionId: 'r1' as any, familyTreeId: 't1' as any, tick: 0 });
       const b = createCharacter({ speciesId: spB, regionId: 'r1' as any, familyTreeId: 't1' as any, tick: 0 });
       const result = canCommunicate(a, b);
@@ -99,9 +123,9 @@ describe('Language & Communication', () => {
       expect(result.garbledContent).toBeDefined();
     });
 
-    it('does not deliver message for unrelated species', () => {
-      const spA = getOrCreateSpecies('MsgNoA', 'MNA', 'MNFA');
-      const spB = getOrCreateSpecies('MsgNoB', 'MNB', 'MNFB');
+    it('does not deliver message for different class species', () => {
+      const spA = getOrCreateSpeciesFull('MsgNoA', 'CX', 'OX', 'MNFA', 'MNA');
+      const spB = getOrCreateSpeciesFull('MsgNoB', 'CY', 'OY', 'MNFB', 'MNB');
       const sender = createCharacter({ speciesId: spA, regionId: 'r1' as any, familyTreeId: 't1' as any, tick: 0 });
       const receiver = createCharacter({ speciesId: spB, regionId: 'r1' as any, familyTreeId: 't1' as any, tick: 0 });
 

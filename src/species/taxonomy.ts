@@ -79,6 +79,7 @@ function defaultTraits(): SpeciesTraits {
     nocturnal: false,
     aquatic: false,
     canFly: false,
+    metabolicRate: 1.0,
   };
 }
 
@@ -97,4 +98,5 @@ function mergeTraits(base: SpeciesTraits, override: Partial<SpeciesTraits>): Spe
 }
 
 // Singleton taxonomy engine
-export const taxonomyEngine = new TaxonomyEngine();
+export let taxonomyEngine = new TaxonomyEngine();
+export function _installTaxonomyEngine(instance: TaxonomyEngine): void { taxonomyEngine = instance; }

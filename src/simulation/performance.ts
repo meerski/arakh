@@ -135,4 +135,5 @@ export interface PerformanceAlert {
   severity: 'low' | 'medium' | 'high';
 }
 
-export const performanceMonitor = new PerformanceMonitor();
+export let performanceMonitor = new PerformanceMonitor();
+export function _installPerformanceMonitor(instance: PerformanceMonitor): void { performanceMonitor = instance; }

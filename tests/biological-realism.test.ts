@@ -654,7 +654,7 @@ describe('Biological Realism', () => {
         ladybug.health = startHealth;
         shark.health = 1;
         const ctx = buildCtx(ladybug, [shark], region);
-        const result = processAction({ type: 'attack', params: {}, timestamp: 0 }, ctx);
+        const result = processAction({ type: 'attack', params: { targetId: shark.id }, timestamp: 0 }, ctx);
         if (!result.success && ladybug.health < startHealth) {
           counterDamageObserved = true;
           break;
@@ -680,7 +680,7 @@ describe('Biological Realism', () => {
         wolf.health = 1;
         deer.health = 1;
         const ctx = buildCtx(wolf, [deer], region);
-        const result = processAction({ type: 'attack', params: {}, timestamp: 0 }, ctx);
+        const result = processAction({ type: 'attack', params: { targetId: deer.id }, timestamp: 0 }, ctx);
         if (result.success && wolf.health >= 1) {
           successfulAttackWithoutCounterDamage = true;
           break;

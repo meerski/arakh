@@ -2,7 +2,7 @@
 // Fame Tracking & Legendary Status
 // ============================================================
 
-import type { Character, CharacterId, SpeciesId, CardRarity } from '../types.js';
+import type { Character, CharacterId, SpeciesId, CardRarity, AchievementTier } from '../types.js';
 import { speciesRegistry } from '../species/species.js';
 
 export interface FameEntry {
@@ -53,15 +53,29 @@ export const FAME_POINTS = {
 export class FameTracker {
   private hallOfFame: FameEntry[] = [];
 
-  /** Record an achievement and add fame points */
-  recordAchievement(character: Character, achievement: string, points: number, tick: number = 0): void {
-    character.fame += points;
+  /** Record an achievement and add fame points. Returns the achievement tier. */
+  recordAchievement(character: Character, achievement: string, points: number, tick: number = 0): AchievementTier {
+    const tier = achievementTiers.recordAndGetTier(achievement);
+
+    // Tier-based fame bonus
+    const tierBonus: Record<AchievementTier, number> = {
+      mythic: 5,
+      legendary: 3,
+      epic: 2,
+      rare: 1,
+      common: 0,
+    };
+    character.fame += points + tierBonus[tier];
+
     character.achievements.push({
       id: crypto.randomUUID(),
       name: achievement,
       description: achievement,
       tick,
+      tier,
     });
+
+    return tier;
   }
 
   /** Check if character has reached legendary status */
@@ -118,13 +132,81 @@ export class FameTracker {
     return this.hallOfFame.length;
   }
 
+  restoreHallOfFame(entries: FameEntry[]): void {
+    this.hallOfFame = entries;
+  }
+
   /** Clear (for testing) */
   clear(): void {
     this.hallOfFame.length = 0;
   }
 }
 
-export const fameTracker = new FameTracker();
+export let fameTracker = new FameTracker();
+export function _installFameTracker(instance: FameTracker): void { fameTracker = instance; }
+
+// ============================================================
+// Achievement Tier System
+// ============================================================
+// First achiever: mythic (1)
+// Next 50: legendary (2-51)
+// Next 450: epic (52-501)
+// Next 4500: rare (502-5001)
+// Rest: common
+
+const TIER_THRESHOLDS: { max: number; tier: AchievementTier }[] = [
+  { max: 1, tier: 'mythic' },
+  { max: 51, tier: 'legendary' },
+  { max: 501, tier: 'epic' },
+  { max: 5001, tier: 'rare' },
+];
+
+export class AchievementTierTracker {
+  // Map from achievement name → count of times achieved globally
+  private achievementCounts: Map<string, number> = new Map();
+
+  /** Record an achievement and return its tier. */
+  recordAndGetTier(achievementName: string): AchievementTier {
+    const count = (this.achievementCounts.get(achievementName) ?? 0) + 1;
+    this.achievementCounts.set(achievementName, count);
+
+    for (const { max, tier } of TIER_THRESHOLDS) {
+      if (count <= max) return tier;
+    }
+    return 'common';
+  }
+
+  /** Get the current count for an achievement. */
+  getCount(achievementName: string): number {
+    return this.achievementCounts.get(achievementName) ?? 0;
+  }
+
+  /** Get the tier that would be assigned for the next achiever. */
+  getNextTier(achievementName: string): AchievementTier {
+    const nextCount = (this.achievementCounts.get(achievementName) ?? 0) + 1;
+    for (const { max, tier } of TIER_THRESHOLDS) {
+      if (nextCount <= max) return tier;
+    }
+    return 'common';
+  }
+
+  /** Get all tracked achievement names. */
+  getAll(): Map<string, number> {
+    return new Map(this.achievementCounts);
+  }
+
+  /** Restore from persistence. */
+  restore(data: [string, number][]): void {
+    this.achievementCounts = new Map(data);
+  }
+
+  clear(): void {
+    this.achievementCounts.clear();
+  }
+}
+
+export let achievementTiers = new AchievementTierTracker();
+export function _installAchievementTiers(instance: AchievementTierTracker): void { achievementTiers = instance; }
 
 // ============================================================
 // Cross-Species Standing
@@ -185,7 +267,8 @@ export class StandingMap {
   }
 }
 
-export const speciesStandings = new StandingMap();
+export let speciesStandings = new StandingMap();
+export function _installSpeciesStandings(instance: StandingMap): void { speciesStandings = instance; }
 
 // ============================================================
 // Debt System
@@ -251,4 +334,5 @@ export class DebtLedger {
   }
 }
 
-export const debtLedger = new DebtLedger();
+export let debtLedger = new DebtLedger();
+export function _installDebtLedger(instance: DebtLedger): void { debtLedger = instance; }

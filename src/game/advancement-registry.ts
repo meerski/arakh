@@ -41,9 +41,14 @@ export class AdvancementRegistry {
     return Array.from(this.advancements.values());
   }
 
+  restore(advancement: SpeciesAdvancement): void {
+    this.advancements.set(this.key(advancement.speciesId, advancement.regionId), advancement);
+  }
+
   clear(): void {
     this.advancements.clear();
   }
 }
 
-export const advancementRegistry = new AdvancementRegistry();
+export let advancementRegistry = new AdvancementRegistry();
+export function _installAdvancementRegistry(instance: AdvancementRegistry): void { advancementRegistry = instance; }

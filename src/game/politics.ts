@@ -8,6 +8,7 @@ import { getGeneValue } from '../species/character.js';
 import { speciesRegistry } from '../species/species.js';
 import { modifyRelationshipStrength } from './social.js';
 import { fameTracker } from './fame.js';
+import { characterRegistry } from '../species/registry.js';
 
 export interface PoliticalEvent {
   type: 'alpha_challenge' | 'exile' | 'coup' | 'coalition' | 'assassination';
@@ -202,9 +203,7 @@ export function tickPolitics(
         const success = worldRNG.chance(0.2 + (stealth - detection) / 200);
 
         if (success) {
-          leader.isAlive = false;
-          leader.diedAtTick = tick;
-          leader.causeOfDeath = 'assassinated';
+          characterRegistry.markDead(leader.id, tick, 'assassinated');
           char.socialRank = Math.min(100, char.socialRank + 15);
           fameTracker.recordAchievement(char, 'Assassination', 12);
 

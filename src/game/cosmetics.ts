@@ -4,7 +4,7 @@
 // Purely cosmetic items that do not affect gameplay.
 // Soulbound to owners. No trading.
 
-import type { OwnerId, CardId } from '../types.js';
+import type { OwnerId, CardId, FamilyTreeId, ColonyId } from '../types.js';
 
 // --- Cosmetic Types ---
 
@@ -14,7 +14,12 @@ export type CosmeticCategory =
   | 'profile_badge'      // Dynasty profile badges
   | 'dashboard_theme'    // Custom dashboard skins
   | 'title'              // Display titles for owners
-  | 'card_back';         // Custom card back designs
+  | 'card_back'          // Custom card back designs
+  | 'dynasty_crest'      // Heraldic crest displayed on family tree
+  | 'appearance_variant' // Heritable appearance overrides for characters
+  | 'narrator_voice'     // Custom narrative voice/style
+  | 'memorial_marker'    // Gravestone/memorial for dead characters
+  | 'colony_skin';       // Visual theme for colony UI
 
 export type CosmeticRarity = 'standard' | 'premium' | 'exclusive' | 'limited';
 
@@ -31,16 +36,25 @@ export interface CosmeticItem {
   purchaseCount: number;   // How many have been purchased
 }
 
+/** Targets a cosmetic can be applied to. */
+export type CosmeticTarget =
+  | CardId                // Applied to a specific card
+  | FamilyTreeId          // Applied to a dynasty (crest, appearance)
+  | ColonyId              // Applied to a colony (skin)
+  | 'profile'             // Applied to owner profile
+  | 'dashboard'           // Applied to dashboard
+  | 'narrator';           // Applied as active narrator voice
+
 export interface OwnedCosmetic {
   cosmeticId: string;
   ownerId: OwnerId;
   purchasedAt: Date;
-  appliedTo?: CardId | 'profile' | 'dashboard';
+  appliedTo?: CosmeticTarget;
 }
 
 // --- Catalog ---
 
-class CosmeticCatalog {
+export class CosmeticCatalog {
   private items: Map<string, CosmeticItem> = new Map();
 
   addItem(item: Omit<CosmeticItem, 'id' | 'purchaseCount'>): CosmeticItem {
@@ -74,11 +88,12 @@ class CosmeticCatalog {
   }
 }
 
-export const cosmeticCatalog = new CosmeticCatalog();
+export let cosmeticCatalog = new CosmeticCatalog();
+export function _installCosmeticCatalog(instance: CosmeticCatalog): void { cosmeticCatalog = instance; }
 
 // --- Owner Inventory ---
 
-class CosmeticInventory {
+export class CosmeticInventory {
   private owned: OwnedCosmetic[] = [];
 
   purchase(ownerId: OwnerId, cosmeticId: string): OwnedCosmetic | null {
@@ -105,8 +120,8 @@ class CosmeticInventory {
     return this.owned.filter(o => o.ownerId === ownerId);
   }
 
-  /** Apply a cosmetic to a card, profile, or dashboard */
-  apply(ownerId: OwnerId, cosmeticId: string, target: CardId | 'profile' | 'dashboard'): boolean {
+  /** Apply a cosmetic to a target (card, profile, dashboard, dynasty, colony, narrator). */
+  apply(ownerId: OwnerId, cosmeticId: string, target: CosmeticTarget): boolean {
     const cosmetic = this.owned.find(o => o.ownerId === ownerId && o.cosmeticId === cosmeticId);
     if (!cosmetic) return false;
 
@@ -123,8 +138,8 @@ class CosmeticInventory {
     return true;
   }
 
-  /** Get cosmetics applied to a specific target */
-  getAppliedTo(ownerId: OwnerId, target: CardId | 'profile' | 'dashboard'): OwnedCosmetic[] {
+  /** Get cosmetics applied to a specific target. */
+  getAppliedTo(ownerId: OwnerId, target: CosmeticTarget): OwnedCosmetic[] {
     return this.owned.filter(o => o.ownerId === ownerId && o.appliedTo === target);
   }
 
@@ -137,7 +152,8 @@ class CosmeticInventory {
   }
 }
 
-export const cosmeticInventory = new CosmeticInventory();
+export let cosmeticInventory = new CosmeticInventory();
+export function _installCosmeticInventory(instance: CosmeticInventory): void { cosmeticInventory = instance; }
 
 // --- Seed default catalog ---
 
@@ -200,5 +216,75 @@ export function seedDefaultCatalog(): void {
   cosmeticCatalog.addItem({
     name: 'Starfield', description: 'A cosmic starfield card back',
     category: 'card_back', rarity: 'premium', price: 350, isAvailable: true,
+  });
+
+  // Dynasty Crests
+  cosmeticCatalog.addItem({
+    name: 'Iron Crown', description: 'A stern iron crown crest for your dynasty',
+    category: 'dynasty_crest', rarity: 'standard', price: 250, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Twin Serpents', description: 'Entwined serpents forming a double helix',
+    category: 'dynasty_crest', rarity: 'premium', price: 600, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Sunburst', description: 'A radiant solar crest, mark of the first dynasties',
+    category: 'dynasty_crest', rarity: 'exclusive', price: 1500, isAvailable: true, maxOwners: 50,
+  });
+
+  // Appearance Variants (heritable — applied to dynasty, inherited by descendants)
+  cosmeticCatalog.addItem({
+    name: 'Albino', description: 'Pale white coloration inherited through the bloodline',
+    category: 'appearance_variant', rarity: 'premium', price: 500, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Melanistic', description: 'Dark pigmentation passed down through generations',
+    category: 'appearance_variant', rarity: 'premium', price: 500, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Scarred Elder', description: 'Battle scars marking a lineage of warriors',
+    category: 'appearance_variant', rarity: 'exclusive', price: 800, isAvailable: true,
+  });
+
+  // Narrator Voices
+  cosmeticCatalog.addItem({
+    name: 'The Chronicler', description: 'A scholarly, measured tone in all narratives',
+    category: 'narrator_voice', rarity: 'standard', price: 200, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'The Bard', description: 'Flowery, dramatic narration with poetic flair',
+    category: 'narrator_voice', rarity: 'premium', price: 450, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'The Stoic', description: 'Terse, matter-of-fact narration. No embellishments.',
+    category: 'narrator_voice', rarity: 'standard', price: 200, isAvailable: true,
+  });
+
+  // Memorial Markers
+  cosmeticCatalog.addItem({
+    name: 'Stone Cairn', description: 'A simple stone cairn marking the fallen',
+    category: 'memorial_marker', rarity: 'standard', price: 150, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Eternal Flame', description: 'A never-extinguishing flame memorial',
+    category: 'memorial_marker', rarity: 'premium', price: 500, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Ancestor Tree', description: 'A great tree planted in memory, growing with the lineage',
+    category: 'memorial_marker', rarity: 'exclusive', price: 1200, isAvailable: true,
+  });
+
+  // Colony Skins
+  cosmeticCatalog.addItem({
+    name: 'Crystal Hive', description: 'Translucent crystalline colony appearance',
+    category: 'colony_skin', rarity: 'premium', price: 600, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Fungal Network', description: 'Bioluminescent fungal colony aesthetic',
+    category: 'colony_skin', rarity: 'premium', price: 600, isAvailable: true,
+  });
+  cosmeticCatalog.addItem({
+    name: 'Ancient Mound', description: 'Weathered, mossy mound colony skin',
+    category: 'colony_skin', rarity: 'standard', price: 300, isAvailable: true,
   });
 }

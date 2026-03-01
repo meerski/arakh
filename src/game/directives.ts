@@ -141,4 +141,5 @@ export class DirectiveQueue {
   }
 }
 
-export const directiveQueue = new DirectiveQueue();
+export let directiveQueue = new DirectiveQueue();
+export function _installDirectiveQueue(instance: DirectiveQueue): void { directiveQueue = instance; }

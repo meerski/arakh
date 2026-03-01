@@ -77,6 +77,11 @@ export class PlayerManager {
   getAllPlayers(): Player[] {
     return Array.from(this.players.values());
   }
+
+  restorePlayer(player: Player): void {
+    this.players.set(player.id, player);
+  }
 }
 
-export const playerManager = new PlayerManager();
+export let playerManager = new PlayerManager();
+export function _installPlayerManager(instance: PlayerManager): void { playerManager = instance; }

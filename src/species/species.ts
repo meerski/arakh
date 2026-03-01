@@ -91,6 +91,19 @@ export class SpeciesRegistry {
     if (!species) return false;
     return species.genesisElderCount < 100;
   }
+
+  /** Register a pre-built species directly (for testing). */
+  registerDirect(species: Species): void {
+    this.species.set(species.id, species);
+  }
+
+  /** Clear all registered species (for testing). */
+  clear(): void {
+    this.species.clear();
+  }
 }
 
-export const speciesRegistry = new SpeciesRegistry();
+export let speciesRegistry = new SpeciesRegistry();
+
+/** @internal Bridge: install a WorldContext-owned instance */
+export function _installSpeciesRegistry(instance: SpeciesRegistry): void { speciesRegistry = instance; }

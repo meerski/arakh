@@ -15,17 +15,20 @@ import { getOwnerDashboard, updateDynastyScore } from '../dashboard/owner.js';
 import { getWorldStats, getSpeciesRankings } from '../dashboard/stats.js';
 import { newsBroadcast } from '../broadcast/news.js';
 import { liveFeed } from '../dashboard/feed.js';
+import { getHealthResponse, getMetricsResponse } from './health.js';
 
-export function createAPI(simulation: SimulationLoop) {
+export function createAPI(simulation: SimulationLoop, options?: { dbEnabled?: boolean }) {
   const app = Fastify({ logger: true });
+  const dbEnabled = options?.dbEnabled ?? false;
 
-  // Health check
+  // Health check (lightweight, for load balancers)
   app.get('/health', async () => {
-    return {
-      status: 'ok',
-      running: simulation.isRunning(),
-      tick: simulation.getWorld().time.tick,
-    };
+    return getHealthResponse(simulation);
+  });
+
+  // Metrics (detailed, for dashboards/monitoring)
+  app.get('/metrics', async () => {
+    return getMetricsResponse(simulation, dbEnabled);
   });
 
   // World state (public, high-level)
@@ -133,6 +136,16 @@ export function createAPI(simulation: SimulationLoop) {
     return newsBroadcast.getBreaking(10);
   });
 
+  // Highlight stories
+  app.get('/news/highlights', async () => {
+    return newsBroadcast.getHighlights(10);
+  });
+
+  // Daily recaps
+  app.get('/news/recaps', async () => {
+    return newsBroadcast.getRecaps(7);
+  });
+
   // Live feed for a player
   app.get<{ Params: { playerId: string } }>('/feed/:playerId', async (request) => {
     return liveFeed.getForPlayer(request.params.playerId, 50);
@@ -161,7 +174,7 @@ export function createAPI(simulation: SimulationLoop) {
     if (!character) return { error: 'Character not found', characterId };
     const world = simulation.getWorld();
     const region = world.regions.get(regionId);
-    character.regionId = regionId;
+    characterRegistry.moveRegion(character.id, regionId);
     return {
       success: true,
       name: character.name,

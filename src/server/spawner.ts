@@ -11,7 +11,7 @@ import { speciesRegistry } from '../species/species.js';
 import { playerManager } from '../game/player.js';
 import { lineageManager } from '../game/lineage.js';
 import { worldRNG } from '../simulation/random.js';
-import { determineRespawn } from '../game/respawn.js';
+import { determineRespawn, pickRespawnSpecies } from '../game/respawn.js';
 import { isBiomeSuitable } from '../simulation/biome.js';
 import type { Session } from './session.js';
 
@@ -246,14 +246,18 @@ export function respawnCharacter(
     return { character: descendant, narrative };
   }
 
+  // Queued / new lineage: pick a species and spawn immediately
+  const respawnSpeciesId = result.speciesId ?? pickRespawnSpecies(null);
+  if (!respawnSpeciesId) return null;
+
   // New lineage: spawn a fresh character of the determined species
-  const suitable = findSuitableRegions(result.speciesId, regions);
+  const suitable = findSuitableRegions(respawnSpeciesId, regions);
   if (suitable.length === 0) return null;
 
-  const region = pickSpawnRegion(result.speciesId, suitable, regions);
+  const region = pickSpawnRegion(respawnSpeciesId, suitable, regions);
 
   const character = createCharacter({
-    speciesId: result.speciesId,
+    speciesId: respawnSpeciesId,
     regionId: region.id,
     familyTreeId: '' as any, // temporary
     playerId,
@@ -263,7 +267,7 @@ export function respawnCharacter(
   });
 
   const tree = lineageManager.createTree({
-    speciesId: result.speciesId,
+    speciesId: respawnSpeciesId,
     ownerId: player.ownerId,
     rootCharacterId: character.id,
   });
@@ -271,14 +275,14 @@ export function respawnCharacter(
   character.familyTreeId = tree.id;
 
   characterRegistry.add(character);
-  speciesRegistry.updatePopulation(result.speciesId, 1);
-  speciesRegistry.incrementGenesisElderCount(result.speciesId);
+  speciesRegistry.updatePopulation(respawnSpeciesId, 1);
+  speciesRegistry.incrementGenesisElderCount(respawnSpeciesId);
   playerManager.assignCharacter(playerId, character.id, tree.id);
 
   session.characterId = character.id;
-  applyPerception(session, result.speciesId);
+  applyPerception(session, respawnSpeciesId);
 
-  const species = speciesRegistry.get(result.speciesId);
+  const species = speciesRegistry.get(respawnSpeciesId);
   const speciesName = species?.commonName ?? 'creature';
 
   const narrative = buildRespawnNarrative(character, region.name, speciesName, false);

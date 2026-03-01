@@ -6,9 +6,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import type { AgentMessage, ServerMessage, PlayerId, AgentAction, ChatMessage, Directive } from '../types.js';
 import { SessionManager } from './session.js';
-import { processAction, buildActionContext } from '../game/actions.js';
 import { rateLimiter } from '../security/rate-limit.js';
 import { filterPerception } from '../security/perception.js';
+import { actionQueue } from '../game/action-queue.js';
 import { processMessage } from './messaging.js';
 import { characterRegistry } from '../species/registry.js';
 import { directiveQueue } from '../game/directives.js';
@@ -150,22 +150,18 @@ export class GameWebSocket {
         return playerId;
       }
 
-      // Build fresh action context from world state
-      const ctx = buildActionContext(
-        session.characterId, this.regions, this.currentTick,
-        this.timeOfDay, this.season, this.weather,
-      );
-      if (!ctx) {
-        this.sendError(ws, 'NO_CHARACTER', 'Character not found or dead');
-        return playerId;
-      }
-
-      const result = processAction(action, ctx);
-
-      // Filter through perception system
-      const filtered = filterPerception(result, session.speciesPerception);
-
-      this.send(ws, { type: 'action_result', payload: filtered });
+      // Enqueue action — will be processed deterministically in next tick
+      const characterId = session.characterId;
+      actionQueue.enqueue({
+        playerId,
+        characterId,
+        action,
+        enqueuedAtTick: this.currentTick,
+        deliver: (result) => {
+          const filtered = filterPerception(result, session.speciesPerception);
+          this.send(ws, { type: 'action_result', payload: filtered });
+        },
+      });
     }
 
     // Handle chat messages between agents

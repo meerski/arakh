@@ -8,9 +8,6 @@ import { createEcosystemState, addFoodWebRelation } from './simulation/ecosystem
 import { createAPI } from './server/api.js';
 import { GameWebSocket } from './server/websocket.js';
 import { SessionManager } from './server/session.js';
-import { newsBroadcast } from './broadcast/news.js';
-import { liveFeed } from './dashboard/feed.js';
-import { speciesRegistry } from './species/species.js';
 import { initializePopulation } from './species/population.js';
 import { generateHiddenLocations } from './game/exploration.js';
 import { seedTaxonomy } from './data/taxonomy/seed.js';
@@ -24,43 +21,90 @@ import { broadcastPerceptionTicks } from './server/perception-tick.js';
 import { isBiomeSuitable, getBiomeCapacityMultiplier } from './simulation/biome.js';
 import { tickPolitics } from './game/politics.js';
 import { tickEvolution } from './game/advancement.js';
-import { characterRegistry } from './species/registry.js';
+import { evaluateAllianceTriggers, tickAlliances } from './game/alliance.js';
+import { createWorldContext, installWorldContext } from './context.js';
+import { createGameTime, TICK_SLOW, TICK_EPOCH } from './simulation/world.js';
+import { initDb, ensureSchema, closeDb, pingDb } from './data/db.js';
+import type { WorldContext } from './context.js';
 import type { World, Region, SpeciesId } from './types.js';
 import type { EcosystemState } from './simulation/ecosystem.js';
+import { join } from 'path';
 
 async function main() {
   console.log('=== ARAKH — Persistent Earth Simulation ===');
   console.log('Initializing world...');
 
-  // 1. Create world
-  const world = createWorld('Earth');
+  // 0. Create WorldContext and install into module-level singletons (bridge)
+  const ctx = createWorldContext();
+  installWorldContext(ctx);
 
-  // 2. Seed taxonomy and species
+  // 0b. Initialize WAL for crash recovery
+  const walPath = join(process.cwd(), 'data', 'wal.jsonl');
+  ctx.wal.init(walPath);
+  console.log(`WAL initialized at ${walPath}`);
+
+  // 1. Initialize database (if DATABASE_URL is set)
+  const dbEnabled = !!process.env.DATABASE_URL;
+  if (dbEnabled) {
+    initDb();
+    const connected = await pingDb();
+    if (connected) {
+      await ensureSchema();
+      console.log('PostgreSQL connected, schema ready');
+    } else {
+      console.warn('PostgreSQL not reachable — running without persistence');
+    }
+  }
+
+  // 2. Create world (may be overwritten by snapshot restore)
+  const world = createWorld('Earth');
+  const ecosystem = createEcosystemState();
+
+  // 3. Always seed taxonomy and species (definitions needed even on restore)
   seedTaxonomy();
   seedBirds();
   seedFish();
   seedInvertebrates();
   seedReptiles();
   seedMammals();
-  const speciesCount = speciesRegistry.getAll().length;
+  const speciesCount = ctx.species.getAll().length;
   console.log(`Registered ${speciesCount} species`);
 
-  // 3. Seed regions
-  seedRegions(world);
-  console.log(`Created ${world.regions.size} regions`);
+  // 4. Try to restore from database snapshot
+  let restored = false;
+  if (dbEnabled) {
+    const snapshot = await ctx.persistence.loadLatest();
+    if (snapshot) {
+      const resumeTick = ctx.persistence.hydrate(snapshot, world, ecosystem, ctx);
+      world.time = createGameTime(resumeTick);
+      restored = true;
+      console.log(`Restored from snapshot at tick ${resumeTick}`);
 
-  // 4. Generate hidden locations for each region
-  let totalSecrets = 0;
-  for (const region of world.regions.values()) {
-    const locations = generateHiddenLocations(region);
-    region.hiddenLocations = locations;
-    totalSecrets += locations.length;
+      // Replay WAL entries after the snapshot tick
+      const walEntries = ctx.wal.getEntriesAfterTick(resumeTick);
+      if (walEntries.length > 0) {
+        const lastWalTick = walEntries[walEntries.length - 1].tick;
+        world.time = createGameTime(lastWalTick);
+        console.log(`Replayed ${walEntries.length} WAL entries (tick ${resumeTick} → ${lastWalTick})`);
+      }
+    }
   }
-  console.log(`Generated ${totalSecrets} hidden locations`);
 
-  // 5. Create ecosystem with balanced food web
-  const ecosystem = createEcosystemState();
-  initializeBalancedEcosystem(world, ecosystem);
+  // 5. Cold start: seed regions, hidden locations, ecosystem
+  if (!restored) {
+    seedRegions(world);
+    console.log(`Created ${world.regions.size} regions`);
+
+    let totalSecrets = 0;
+    for (const region of world.regions.values()) {
+      const locations = generateHiddenLocations(region);
+      region.hiddenLocations = locations;
+      totalSecrets += locations.length;
+    }
+    console.log(`Generated ${totalSecrets} hidden locations`);
+
+    initializeBalancedEcosystem(ctx, world, ecosystem);
+  }
 
   // 6. Start simulation
   const simulation = new SimulationLoop(world, ecosystem, {
@@ -68,7 +112,7 @@ async function main() {
   });
 
   // 7. Start REST API
-  const api = createAPI(simulation);
+  const api = createAPI(simulation, { dbEnabled });
   const sessions = new SessionManager();
 
   const port = parseInt(process.env.PORT ?? '3000');
@@ -103,18 +147,35 @@ async function main() {
       weather,
     );
 
-    // Run politics tick (every 10 ticks to avoid performance impact)
-    if (result.tick % 10 === 0) {
-      const allLiving = characterRegistry.getLiving();
+    // Run politics tick (every Slow tick)
+    if (result.tick % TICK_SLOW === 0) {
+      const allLiving = ctx.characters.getLiving();
       const politicalEvents = tickPolitics(allLiving, result.tick);
       for (const pe of politicalEvents) {
-        liveFeed.addBroadcast(pe.narrative, result.tick);
+        ctx.feed.addBroadcastText(pe.narrative, result.tick);
       }
+
+      // Alliance tick — decay and dissolution
+      const allianceEvents = tickAlliances(result.tick);
+      for (const ae of allianceEvents) {
+        ctx.feed.addBroadcastText(ae.description, result.tick);
+      }
+
+      // Evaluate alliance triggers in each region
+      for (const region of w.regions.values()) {
+        const newAlliance = evaluateAllianceTriggers(region, simulation.getEcosystem(), result.tick);
+        if (newAlliance) {
+          ctx.feed.addBroadcastText(`New alliance formed: ${newAlliance.name}`, result.tick);
+        }
+      }
+
+      // Main character promotions/demotions
+      ctx.mainCharacters.evaluatePromotions(result.tick);
     }
 
-    // Run evolution tick (handled internally — checks every 500 ticks)
-    if (result.tick % 500 === 0) {
-      const allLiving = characterRegistry.getLiving();
+    // Run evolution tick (every Epoch tick)
+    if (result.tick % TICK_EPOCH === 0) {
+      const allLiving = ctx.characters.getLiving();
       // Group by species+region
       const groups = new Map<string, { speciesId: string; regionId: string; chars: typeof allLiving }>();
       for (const c of allLiving) {
@@ -126,18 +187,24 @@ async function main() {
       for (const { speciesId, regionId, chars } of groups.values()) {
         const evoNarrative = tickEvolution(speciesId, regionId, chars, result.tick);
         if (evoNarrative) {
-          liveFeed.addBroadcast(evoNarrative, result.tick);
+          ctx.feed.addBroadcastText(evoNarrative, result.tick);
         }
+      }
+
+      // Dynasty tier evaluation (every Epoch)
+      const tierEvents = ctx.tierManager.evaluateAll(result.tick);
+      for (const te of tierEvents) {
+        ctx.feed.addBroadcastText(te.narrative, result.tick);
       }
     }
 
     // News broadcast + live feed
-    const broadcasts = newsBroadcast.processTick(result);
+    const broadcasts = ctx.news.processTick(result);
     for (const b of broadcasts) {
-      liveFeed.addBroadcast(b.text, result.tick);
+      ctx.feed.addBroadcast(b);
     }
     for (const event of result.events) {
-      liveFeed.addEvent(event);
+      ctx.feed.addEvent(event);
     }
 
     // Broadcast breaking events to all connected agents
@@ -149,6 +216,35 @@ async function main() {
         });
       }
     }
+
+    // WAL: append tick summary every tick
+    ctx.wal.append({
+      tick: result.tick,
+      timestamp: Date.now(),
+      type: 'tick_summary',
+      births: result.births as string[],
+      deaths: result.deaths as string[],
+      events: result.events.map(e => e.description).slice(0, 20),
+      actionCount: result.actionResults.length,
+      discoveries: result.discoveries.slice(0, 10),
+    });
+
+    // Persistence: flush every TICK_SLOW (30 ticks = ~30s), snapshot every 6000 ticks (~100min)
+    if (dbEnabled && result.tick % TICK_SLOW === 0) {
+      const isCheckpoint = result.tick % 6000 === 0;
+      if (isCheckpoint) {
+        ctx.persistence.saveSnapshot(w, simulation.getEcosystem(), ctx).then(() => {
+          // Truncate WAL after successful snapshot
+          ctx.wal.truncate();
+        }).catch(err =>
+          console.error('[Persistence] Snapshot failed:', err.message),
+        );
+      } else {
+        ctx.persistence.flush(w, simulation.getEcosystem(), ctx).catch(err =>
+          console.error('[Persistence] Flush failed:', err.message),
+        );
+      }
+    }
   });
 
   simulation.start();
@@ -156,10 +252,12 @@ async function main() {
 
   // Count populations
   let totalPop = 0;
+  let totalSecrets = 0;
   for (const region of world.regions.values()) {
     for (const pop of region.populations) {
       totalPop += pop.count;
     }
+    totalSecrets += region.hiddenLocations?.length ?? 0;
   }
 
   console.log('\n=== Arakh is alive ===');
@@ -168,22 +266,36 @@ async function main() {
   console.log(`Regions: ${world.regions.size}`);
   console.log(`Hidden locations: ${totalSecrets}`);
   console.log(`Total population: ${totalPop.toLocaleString()}`);
+  console.log(`Characters: ${ctx.characters.livingCount}`);
   console.log(`Era: ${world.era.name}`);
+  console.log(`Tick: ${world.time.tick}`);
+  console.log(`Persistence: ${dbEnabled ? 'PostgreSQL' : 'disabled'}`);
+  console.log(`Mode: ${restored ? 'restored from snapshot' : 'cold start'}`);
   console.log('\nThe simulation runs. The world awaits its agents.\n');
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('\nShutting down...');
     simulation.stop();
-    api.close().then(() => process.exit(0));
+    if (dbEnabled) {
+      console.log('Flushing final snapshot...');
+      await ctx.persistence.saveSnapshot(world, ecosystem, ctx).then(() => {
+        ctx.wal.truncate(); // Clean WAL after successful final snapshot
+      }).catch(err =>
+        console.error('[Persistence] Final flush failed:', err.message),
+      );
+      await closeDb();
+    }
+    await api.close();
+    process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { shutdown(); });
+  process.on('SIGTERM', () => { shutdown(); });
 }
 
 /** Initialize a balanced starting ecosystem where all species coexist in equilibrium */
-function initializeBalancedEcosystem(world: World, ecosystem: EcosystemState): void {
-  const allSpecies = speciesRegistry.getAll();
+function initializeBalancedEcosystem(ctx: WorldContext, world: World, ecosystem: EcosystemState): void {
+  const allSpecies = ctx.species.getAll();
   const regions = Array.from(world.regions.values());
 
   if (regions.length === 0 || allSpecies.length === 0) return;

@@ -605,4 +605,5 @@ export class ResourcePropertyRegistry {
 
 // --- Singleton ---
 
-export const resourceProperties = new ResourcePropertyRegistry();
+export let resourceProperties = new ResourcePropertyRegistry();
+export function _installResourceProperties(instance: ResourcePropertyRegistry): void { resourceProperties = instance; }

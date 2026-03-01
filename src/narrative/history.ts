@@ -81,6 +81,16 @@ export class WorldChronicle {
     return this.records.filter(r => r.tick >= startTick && r.tick <= endTick);
   }
 
+  getSnapshot(): { records: HistoricalRecord[]; eras: Era[] } {
+    return { records: this.records, eras: this.eras };
+  }
+
+  restoreSnapshot(data: { records: any[]; eras: any[] }): void {
+    this.records = data.records;
+    this.eras = data.eras;
+    this.currentEra = this.eras.length > 0 ? this.eras[this.eras.length - 1] : { name: 'The Dawn', startTick: 0, dominantSpecies: null };
+  }
+
   private calculateSignificance(event: WorldEvent): number {
     const levelWeights: Record<string, number> = {
       personal: 0.1,
@@ -96,4 +106,6 @@ export class WorldChronicle {
   }
 }
 
-export const worldChronicle = new WorldChronicle();
+export let worldChronicle = new WorldChronicle();
+
+export function _installWorldChronicle(instance: WorldChronicle): void { worldChronicle = instance; }

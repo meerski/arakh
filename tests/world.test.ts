@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { createGameTime, createWorld, createRegion, addRegionConnection } from '../src/simulation/world.js';
+import {
+  createGameTime, createWorld, createRegion, addRegionConnection,
+  TICKS_PER_YEAR, TICKS_PER_DAY, TICKS_PER_HOUR,
+} from '../src/simulation/world.js';
 
 describe('GameTime', () => {
   it('tick 0 is year 0, day 0, hour 0', () => {
@@ -11,25 +14,37 @@ describe('GameTime', () => {
     expect(t.season).toBe('spring');
   });
 
-  it('86400 ticks = 1 year', () => {
-    const t = createGameTime(86400);
+  it('17520 ticks = 1 year', () => {
+    const t = createGameTime(TICKS_PER_YEAR);
     expect(t.year).toBe(1);
     expect(t.day).toBe(0);
   });
 
-  it('correctly determines day/night', () => {
-    // Hour 0 = night
+  it('48 ticks = 1 day', () => {
+    const t = createGameTime(TICKS_PER_DAY);
+    expect(t.year).toBe(0);
+    expect(t.day).toBe(1);
+    expect(t.hour).toBe(0);
+  });
+
+  it('2 ticks = 1 hour', () => {
+    const t = createGameTime(TICKS_PER_HOUR);
+    expect(t.hour).toBe(1);
+  });
+
+  it('correctly determines day/night via lightLevel', () => {
+    // Hour 0 = midnight = dark
     const midnight = createGameTime(0);
     expect(midnight.isDay).toBe(false);
+    expect(midnight.lightLevel).toBe(0);
 
-    // ~noon (12 hours into day)
-    // TICKS_PER_HOUR = 86400/365/24 ≈ 9.86
-    const noon = createGameTime(Math.round(12 * 86400 / 365 / 24));
+    // ~noon (hour 12 = tick 24)
+    const noon = createGameTime(12 * TICKS_PER_HOUR);
     expect(noon.isDay).toBe(true);
+    expect(noon.lightLevel).toBeGreaterThan(0.9);
   });
 
   it('cycles through seasons', () => {
-    const TICKS_PER_YEAR = 86400;
     const spring = createGameTime(0);
     const summer = createGameTime(Math.floor(TICKS_PER_YEAR * 0.3));
     const autumn = createGameTime(Math.floor(TICKS_PER_YEAR * 0.55));
@@ -39,6 +54,11 @@ describe('GameTime', () => {
     expect(summer.season).toBe('summer');
     expect(autumn.season).toBe('autumn');
     expect(winter.season).toBe('winter');
+  });
+
+  it('has lunar phases', () => {
+    const t = createGameTime(0);
+    expect(t.lunarPhase).toBeDefined();
   });
 });
 

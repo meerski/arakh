@@ -8,6 +8,7 @@
 import type { Region, RegionId, SpeciesId, Population, Resource, WorldEvent } from '../types.js';
 import { worldRNG } from './random.js';
 import { speciesRegistry } from '../species/species.js';
+import { consumePlantBiomass } from './plants.js';
 
 // ============================================================
 // Types
@@ -122,16 +123,31 @@ function consumeResources(region: Region, pop: Population): number {
   const totalDemand = pop.count * consumptionPerCapita;
 
   if (diet === 'herbivore' || diet === 'omnivore') {
-    // Consume plant/vegetation resources
+    const demandFactor = diet === 'omnivore' ? 0.5 : 1;
+    const plantDemand = totalDemand * demandFactor;
+
+    // First try consuming from living plant biomass
+    let plantSatisfaction = 0;
+    if (region.plantPopulations.length > 0) {
+      let consumed = 0;
+      for (const plant of region.plantPopulations) {
+        if (plant.permanentlyDestroyed) continue;
+        const got = consumePlantBiomass(region, plant.plantType, plantDemand / region.plantPopulations.length);
+        consumed += got;
+      }
+      plantSatisfaction = plantDemand > 0 ? consumed / plantDemand : 1;
+    }
+
+    // Also try static resources
     const plantResources = region.resources.filter(r =>
       ['vegetation', 'grass', 'berries', 'fruit', 'seeds', 'algae', 'kelp', 'plankton',
        'bamboo', 'leaves', 'roots', 'bark', 'nectar', 'pollen', 'fungi'].includes(r.type)
     );
-    if (plantResources.length === 0) {
-      // Fall back to any resource
-      return consumeFromPool(region.resources, totalDemand * (diet === 'omnivore' ? 0.5 : 1));
-    }
-    return consumeFromPool(plantResources, totalDemand * (diet === 'omnivore' ? 0.5 : 1));
+    const resourceSatisfaction = plantResources.length > 0
+      ? consumeFromPool(plantResources, plantDemand * 0.5)
+      : consumeFromPool(region.resources, plantDemand * 0.5);
+
+    return Math.min(1, plantSatisfaction * 0.6 + resourceSatisfaction * 0.4);
   }
 
   if (diet === 'detritivore') {
@@ -494,12 +510,86 @@ export function generatePopulationPollution(region: Region, ecosystem: Ecosystem
 // Resource Regeneration
 // ============================================================
 
-/** Regenerate resources each tick */
-export function regenerateResources(region: Region): void {
+// ============================================================
+// Extinction Cascades
+// ============================================================
+
+/**
+ * Process cascading effects when a species goes extinct.
+ * Returns WorldEvents describing the ecological consequences.
+ */
+export function processExtinctionCascade(
+  extinctSpeciesId: SpeciesId,
+  ecosystem: EcosystemState,
+  tick: number,
+): WorldEvent[] {
+  const events: WorldEvent[] = [];
+  const species = speciesRegistry.get(extinctSpeciesId);
+  const speciesName = species?.commonName ?? extinctSpeciesId;
+
+  // Predators that ate this species lose a food source
+  const predatorEntries = getPredatorsOf(ecosystem, extinctSpeciesId);
+  for (const entry of predatorEntries) {
+    const predator = speciesRegistry.get(entry.predatorId);
+    if (!predator || predator.status === 'extinct') continue;
+
+    events.push({
+      id: crypto.randomUUID(),
+      type: 'extinction',
+      level: 'species',
+      regionIds: [],
+      description: `The extinction of ${speciesName} has left ${predator.commonName} without a food source. Population pressure mounts.`,
+      tick,
+      effects: [{ type: 'food_loss', speciesId: entry.predatorId, magnitude: entry.efficiency }],
+      resolved: true,
+    });
+  }
+
+  // Prey this species hunted may boom unchecked
+  const preyEntries = getPreyOf(ecosystem, extinctSpeciesId);
+  for (const entry of preyEntries) {
+    const prey = speciesRegistry.get(entry.preyId);
+    if (!prey || prey.status === 'extinct') continue;
+
+    events.push({
+      id: crypto.randomUUID(),
+      type: 'extinction',
+      level: 'species',
+      regionIds: [],
+      description: `With the extinction of ${speciesName}, ${prey.commonName} populations may grow unchecked.`,
+      tick,
+      effects: [{ type: 'predator_release', speciesId: entry.preyId, magnitude: entry.efficiency }],
+      resolved: true,
+    });
+  }
+
+  // If herbivore extinct, vegetation reclaims
+  if (species && (species.traits.diet === 'herbivore')) {
+    events.push({
+      id: crypto.randomUUID(),
+      type: 'extinction',
+      level: 'regional',
+      regionIds: [],
+      description: `With the extinction of ${speciesName}, vegetation reclaims the regions they once grazed.`,
+      tick,
+      effects: [{ type: 'vegetation_recovery', magnitude: 0.5 }],
+      resolved: true,
+    });
+  }
+
+  return events;
+}
+
+// ============================================================
+// Resource Regeneration
+// ============================================================
+
+/** Regenerate resources each tick. Pass renewModifier from worldDrift externally. */
+export function regenerateResources(region: Region, renewModifier: number = 1.0): void {
   for (const resource of region.resources) {
-    // Pollution reduces regeneration rate
+    // Pollution reduces regeneration rate, drift modifies further
     const pollutionFactor = 1 - region.climate.pollution * 0.5;
-    const effectiveRegen = resource.renewRate * Math.max(0.1, pollutionFactor);
+    const effectiveRegen = resource.renewRate * Math.max(0.1, pollutionFactor) * renewModifier;
 
     resource.quantity = Math.min(
       resource.maxQuantity,

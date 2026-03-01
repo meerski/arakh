@@ -5,6 +5,7 @@
 
 import type { World, Region, Biome, WorldLayer } from '../../types.js';
 import { createRegion, addRegionConnection } from '../../simulation/world.js';
+import { getDefaultPlants } from '../../simulation/plants.js';
 
 interface RegionSeed {
   name: string;
@@ -361,6 +362,9 @@ export function seedRegions(world: World): void {
         properties: new Map(),
       });
     }
+
+    // Seed plants per biome
+    region.plantPopulations = getDefaultPlants(seed.biome);
 
     world.regions.set(region.id, region);
     regionMap.set(seed.name, { id: region.id, seed });

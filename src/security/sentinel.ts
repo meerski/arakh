@@ -244,4 +244,6 @@ export class SentinelAgent {
   }
 }
 
-export const sentinelAgent = new SentinelAgent();
+export let sentinelAgent = new SentinelAgent();
+
+export function _installSentinelAgent(instance: SentinelAgent): void { sentinelAgent = instance; }

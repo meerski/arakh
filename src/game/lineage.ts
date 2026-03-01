@@ -26,6 +26,9 @@ export class LineageManager {
       generations: 1,
       members: [params.rootCharacterId],
       isExtinct: false,
+      tier: 'individual',
+      populationGenome: null,
+      populationCount: 1,
     };
     this.trees.set(tree.id, tree);
     this.childrenEdges.set(tree.id, new Map());
@@ -248,6 +251,19 @@ export class LineageManager {
   getParentEdges(treeId: FamilyTreeId): Map<CharacterId, CharacterId[]> | undefined {
     return this.parentEdges.get(treeId);
   }
+
+  restoreTree(tree: FamilyTree): void {
+    this.trees.set(tree.id, tree);
+
+    const childrenMap = new Map<CharacterId, CharacterId[]>();
+    const parentMap = new Map<CharacterId, CharacterId[]>();
+
+    // Rebuild edges from the existing parent edge data if present,
+    // otherwise start empty — addMember calls will populate them.
+    this.childrenEdges.set(tree.id, childrenMap);
+    this.parentEdges.set(tree.id, parentMap);
+  }
 }
 
-export const lineageManager = new LineageManager();
+export let lineageManager = new LineageManager();
+export function _installLineageManager(instance: LineageManager): void { lineageManager = instance; }

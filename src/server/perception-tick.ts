@@ -18,6 +18,12 @@ import { SessionManager, type Session } from './session.js';
 import { characterRegistry } from '../species/registry.js';
 import { speciesRegistry } from '../species/species.js';
 import { worldRNG } from '../simulation/random.js';
+import { encounterRegistry } from '../game/encounters.js';
+import { getRegionFeelNarrative } from '../simulation/region-dynamics.js';
+import { corpseRegistry } from '../simulation/corpses.js';
+import { catastropheEngine } from '../simulation/catastrophes.js';
+import { heartlandTracker } from '../game/heartland.js';
+import { intelligenceRegistry } from '../game/intelligence.js';
 
 /**
  * Broadcast perception data to all connected agents.
@@ -106,8 +112,47 @@ function buildPerceptionData(
   const threats = buildThreats(character, region, perception);
   const opportunities = buildOpportunities(character, region, perception);
 
+  // Add pending encounter info to threats
+  const pendingEncounters = encounterRegistry.getActiveEncounters(character.id);
+  for (const enc of pendingEncounters) {
+    const optionList = enc.options.map(o => o.action).join(', ');
+    threats.push(`ENCOUNTER: ${enc.type}! You can: ${optionList}. Respond with the 'respond' action.`);
+  }
+
+  // Add region feel narrative
+  const regionFeel = getRegionFeelNarrative(region.id);
+  const fullSurroundings = regionFeel ? `${surroundings} ${regionFeel}` : surroundings;
+
+  // Heartland awareness
+  const heartlandProfile = heartlandTracker.getProfile(character.familyTreeId);
+  if (heartlandProfile) {
+    if (heartlandProfile.heartlandRegionId === region.id) {
+      opportunities.push('You are in your family\'s stronghold — this territory is well-known to you');
+    }
+    if (heartlandProfile.exposureLevel > 0.3) {
+      threats.push('Your territory is under watch — hostile families know where you concentrate');
+    }
+  }
+
+  // Intel awareness — notify if family has intel on this region
+  const regionIntel = intelligenceRegistry.getRegionIntel(character.familyTreeId, region.id);
+  if (regionIntel && regionIntel.reliability > 0.5) {
+    if (regionIntel.knownThreats.length > 0) {
+      threats.push(`Intelligence reports: ${regionIntel.knownThreats[0]}`);
+    }
+  }
+
+  // Add corpse hints
+  const corpses = corpseRegistry.getCorpsesInRegion(region.id);
+  if (corpses.length > 0 && perception.smellRange > 30) {
+    const freshCorpse = corpses.find(c => c.biomassRemaining > 50);
+    if (freshCorpse) {
+      opportunities.push('The remains of a large creature lie nearby');
+    }
+  }
+
   return {
-    surroundings,
+    surroundings: fullSurroundings,
     nearbyEntities,
     weather,
     timeOfDay,
@@ -322,6 +367,26 @@ function buildThreats(
 
   if (region.climate.pollution > 0.7) {
     threats.push('The air feels toxic and heavy');
+  }
+
+  // Catastrophe warnings
+  const activeCatastrophes = catastropheEngine.getActiveCatastrophes(region.id);
+  for (const cat of activeCatastrophes) {
+    const warnings: Record<string, string> = {
+      disease_outbreak: 'Disease spreads through the population',
+      famine: 'Starvation grips the land — food is desperately scarce',
+      flood: 'Rising waters threaten everything in the lowlands',
+      landslide: 'The ground shifts and crumbles underfoot',
+      forest_fire: 'The air is thick with smoke and ash',
+      plague: 'A terrible plague ravages the region',
+      toxic_bloom: 'The water churns with toxic algae',
+      insect_swarm: 'A massive insect swarm darkens the sky',
+      rockfall: 'Rocks tumble dangerously from above',
+      lightning_storm: 'Lightning tears across the sky in relentless waves',
+      ice_age_pulse: 'An unnatural cold descends, freezing everything',
+      supervolcano: 'The earth shakes with volcanic fury',
+    };
+    threats.push(warnings[cat.type] ?? 'A catastrophe unfolds around you');
   }
 
   return threats;

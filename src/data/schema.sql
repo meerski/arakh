@@ -170,3 +170,14 @@ CREATE TABLE IF NOT EXISTS populations (
   count BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (region_id, species_id)
 );
+
+-- Snapshots (JSONB full-state persistence, max 30s data loss)
+CREATE TABLE IF NOT EXISTS snapshots (
+  id SERIAL PRIMARY KEY,
+  tick BIGINT NOT NULL,
+  version INT NOT NULL DEFAULT 2,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_snapshots_tick ON snapshots(tick DESC);

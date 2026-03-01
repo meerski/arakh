@@ -4,7 +4,7 @@
 
 import type {
   AgentAction, ActionResult, ActionType, Character, Region,
-  SensoryData, EntitySighting, ActionEffect, CharacterId,
+  SensoryData, EntitySighting, ActionEffect, CharacterId, Corpse,
 } from '../types.js';
 import { worldRNG } from '../simulation/random.js';
 import { getGeneValue } from '../species/character.js';
@@ -19,6 +19,23 @@ import { addBidirectionalRelationship, modifyRelationshipStrength } from './soci
 import { fameTracker } from './fame.js';
 import { speciesRegistry } from '../species/species.js';
 import { getEcosystem } from '../simulation/ecosystem.js';
+import { corpseRegistry } from '../simulation/corpses.js';
+import { encounterRegistry } from './encounters.js';
+import { worldDrift } from '../security/world-drift.js';
+import { roleRegistry } from './roles.js';
+import { tierManager } from '../species/tier-manager.js';
+import { domesticationRegistry } from './domestication.js';
+import { intelligenceRegistry } from './intelligence.js';
+import { espionageRegistry } from './espionage.js';
+import { heartlandTracker } from './heartland.js';
+import { betrayalRegistry } from './betrayal.js';
+import { handleShareIntel } from './intel-sharing.js';
+import { trustLedger } from './trust.js';
+import { validateAction, sanitizeAction } from '../security/action-validator.js';
+import { auditLog } from '../data/audit-log.js';
+import { rateLimiter } from '../security/rate-limit.js';
+import { antiGaming } from '../security/anti-gaming.js';
+import { colonyRegistry, colonyForage, colonyDefend, colonyReproduce, colonyConstruct } from '../species/colony.js';
 
 export interface ActionContext {
   character: Character;
@@ -31,6 +48,7 @@ export interface ActionContext {
   timeOfDay: string;
   season: string;
   weather: string;
+  corpses: Corpse[];
 }
 
 /** Build an ActionContext from a character ID and world state */
@@ -71,6 +89,8 @@ export function buildActionContext(
     })
     .map(() => 'A hostile presence lurks nearby');
 
+  const corpses = corpseRegistry.getCorpsesInRegion(region.id);
+
   return {
     character,
     region,
@@ -82,12 +102,78 @@ export function buildActionContext(
     timeOfDay,
     season,
     weather,
+    corpses,
   };
 }
 
 /** Process an agent's action intent and return a narrative result */
 export function processAction(action: AgentAction, context: ActionContext): ActionResult {
-  const handler = ACTION_HANDLERS[action.type];
+  const playerId = context.character.playerId;
+
+  // --- Security Gate: Rate Limiting ---
+  if (playerId && !rateLimiter.check(playerId)) {
+    auditLog.log({
+      tick: context.tick,
+      timestamp: Date.now(),
+      playerId: playerId,
+      characterId: context.character.id,
+      action,
+      valid: false,
+      rejectionReason: 'Rate limit exceeded',
+    });
+    return {
+      success: false,
+      narrative: 'You are acting too quickly. Take a moment to gather your thoughts.',
+      effects: [],
+      sensoryData: buildSensoryData(context),
+    };
+  }
+
+  // --- Security Gate: Action Validation ---
+  const validation = validateAction(action, context.character.id);
+  if (!validation.valid) {
+    auditLog.log({
+      tick: context.tick,
+      timestamp: Date.now(),
+      playerId: playerId ?? ('system' as any),
+      characterId: context.character.id,
+      action,
+      valid: false,
+      rejectionReason: validation.reason,
+    });
+    return {
+      success: false,
+      narrative: 'You attempt something incomprehensible. Nothing happens.',
+      effects: [],
+      sensoryData: buildSensoryData(context),
+    };
+  }
+
+  // --- Sanitize action params ---
+  const sanitized = sanitizeAction(action);
+
+  // --- Anti-gaming: record action for pattern analysis ---
+  if (playerId) {
+    antiGaming.recordAction(playerId, sanitized);
+  }
+
+  // Check for pending encounters — must respond first
+  const pendingEncounters = encounterRegistry.getActiveEncounters(context.character.id);
+  if (pendingEncounters.length > 0 && sanitized.type !== 'respond') {
+    // Auto-resolve with the action as implicit response
+    const enc = pendingEncounters[0];
+    const resolution = encounterRegistry.resolveEncounter(enc.id, 'flee', context.tick);
+    if (!context.character.isAlive) {
+      return {
+        success: false,
+        narrative: resolution.narrative,
+        effects: [],
+        sensoryData: buildSensoryData(context),
+      };
+    }
+  }
+
+  const handler = ACTION_HANDLERS[sanitized.type];
   if (!handler) {
     return {
       success: false,
@@ -97,10 +183,21 @@ export function processAction(action: AgentAction, context: ActionContext): Acti
     };
   }
 
-  const result = handler(action, context);
+  const result = handler(sanitized, context);
 
   // Apply effects to world state
   applyEffects(result.effects, context);
+
+  // --- Audit: log successful action ---
+  auditLog.log({
+    tick: context.tick,
+    timestamp: Date.now(),
+    playerId: playerId ?? ('system' as any),
+    characterId: context.character.id,
+    action: sanitized,
+    valid: true,
+    resultSuccess: result.success,
+  });
 
   return result;
 }
@@ -152,9 +249,7 @@ export function applyEffects(effects: ActionEffect[], ctx: ActionContext): void 
           const dmg = effect.value as number;
           target.health = Math.max(0, target.health - dmg);
           if (target.health <= 0) {
-            target.isAlive = false;
-            target.diedAtTick = ctx.tick;
-            target.causeOfDeath = 'killed in combat';
+            characterRegistry.markDead(target.id, ctx.tick, 'killed in combat');
           }
         }
         break;
@@ -256,44 +351,34 @@ export function checkPredatorEncounter(ctx: ActionContext, riskLevel: number): A
     return ecosystem.foodWeb.some(e => e.predatorId === c.speciesId && e.preyId === ctx.character.speciesId);
   });
 
-  if (predators.length === 0 || !worldRNG.chance(riskLevel)) return null;
+  // Apply drift, observation, sentinel protection, and night modifiers
+  const detectionCoeff = worldDrift.getCoefficient('predator_detection', ctx.tick);
+  const observationReduction = roleRegistry.getObservationModifier(ctx.character);
+  const sentinelReduction = roleRegistry.getSentinelProtection(ctx.region.id, ctx.character.speciesId);
+  const isNight = ctx.timeOfDay === 'night' || ctx.timeOfDay === 'dusk';
+  const nightVuln = roleRegistry.getNightVulnerability(ctx.character, isNight);
 
-  // Speed/perception check to escape
-  const speed = getGeneValue(ctx.character, 'speed');
-  const escaped = worldRNG.chance(0.3 + speed * 0.005);
+  const adjustedRisk = riskLevel * detectionCoeff * (1 - observationReduction) * (1 - sentinelReduction) * (1 + nightVuln);
 
-  if (escaped) {
-    const predSpecies = speciesRegistry.get(predators[0].speciesId);
-    return {
-      success: false,
-      narrative: `You sense a ${predSpecies?.commonName ?? 'predator'} nearby and narrowly escape!`,
-      effects: [{ type: 'energy_decrease', target: ctx.character.id, value: -0.05 }],
-      sensoryData: buildSensoryData(ctx),
-    };
-  }
+  if (predators.length === 0 || !worldRNG.chance(adjustedRisk)) return null;
 
   const predator = worldRNG.pick(predators);
-  const damage = getGeneValue(predator, 'strength') * 0.012;
-  ctx.character.health = Math.max(0, ctx.character.health - damage);
-
-  if (ctx.character.health <= 0) {
-    ctx.character.isAlive = false;
-    ctx.character.diedAtTick = ctx.tick;
-    const predSpecies = speciesRegistry.get(predator.speciesId);
-    ctx.character.causeOfDeath = `killed by ${predSpecies?.commonName ?? 'a predator'} while exploring`;
-    return {
-      success: false,
-      narrative: `A ${predSpecies?.commonName ?? 'predator'} strikes from the shadows. You do not survive the encounter.`,
-      effects: [{ type: 'damage_dealt', target: ctx.character.id, value: damage }],
-      sensoryData: buildSensoryData(ctx),
-    };
-  }
-
   const predSpecies = speciesRegistry.get(predator.speciesId);
+  const threatLevel = Math.min(1, getGeneValue(predator, 'strength') / 100 + getGeneValue(predator, 'size') / 200);
+
+  // Create an encounter event instead of auto-resolving
+  const encounter = encounterRegistry.createEncounter(
+    ctx.character.id,
+    'predator_spotted',
+    { predatorId: predator.id, threatLevel },
+    ctx.tick,
+  );
+
+  const optionList = encounter.options.map(o => o.action).join(', ');
   return {
     success: false,
-    narrative: `A ${predSpecies?.commonName ?? 'predator'} attacks you! You escape wounded.`,
-    effects: [{ type: 'damage_dealt', target: ctx.character.id, value: damage }],
+    narrative: `A ${predSpecies?.commonName ?? 'predator'} approaches! You can: ${optionList}. Use the 'respond' action with your choice.`,
+    effects: [{ type: 'energy_decrease', target: ctx.character.id, value: -0.02 }],
     sensoryData: buildSensoryData(ctx),
   };
 }
@@ -309,6 +394,7 @@ const ACTION_HANDLERS: Record<ActionType, ActionHandler> = {
   build: handleBuild,
   craft: handleCraft,
   gather: handleGather,
+  scavenge: handleScavenge,
   communicate: handleCommunicate,
   trade: handleTrade,
   ally: handleAlly,
@@ -322,6 +408,20 @@ const ACTION_HANDLERS: Record<ActionType, ActionHandler> = {
   observe: handleObserve,
   inspect: handleInspect,
   propose: handlePropose,
+  respond: handleRespond,
+  assign_role: handleAssignRole,
+  domesticate: handleDomesticate,
+  spy: handleSpy,
+  infiltrate: handleInfiltrate,
+  spread_rumors: handleSpreadRumors,
+  counter_spy: handleCounterSpy,
+  share_intel: (action, ctx) => handleShareIntel(action, ctx),
+  betray: handleBetray,
+  colony_forage: handleColonyForage,
+  colony_defend: handleColonyDefend,
+  colony_expand: handleColonyExpand,
+  colony_construct: handleColonyConstruct,
+  colony_reproduce: handleColonyReproduce,
 };
 
 function handleMove(action: AgentAction, ctx: ActionContext): ActionResult {
@@ -337,6 +437,9 @@ function handleMove(action: AgentAction, ctx: ActionContext): ActionResult {
     // Energy cost for movement
     ctx.character.energy = Math.max(0, ctx.character.energy - 0.05);
     ctx.character.hunger = Math.min(1, ctx.character.hunger + 0.02);
+
+    // Record exploration for family intel map
+    intelligenceRegistry.recordExploration(ctx.character.id, ctx.region.id, ctx.region, ctx.tick);
   }
 
   return {
@@ -354,12 +457,16 @@ function handleExplore(_action: AgentAction, ctx: ActionContext): ActionResult {
   const encounter = checkPredatorEncounter(ctx, 0.15);
   if (encounter) return encounter;
 
-  // Wire into the real discovery system
+  // Wire into the real discovery system (drift-modified)
+  const _explorationCoeff = worldDrift.getCoefficient('exploration', ctx.tick);
   const discovery = attemptDiscovery(ctx.character, ctx.region);
 
   // Energy/hunger cost for exploring
   ctx.character.energy = Math.max(0, ctx.character.energy - 0.08);
   ctx.character.hunger = Math.min(1, ctx.character.hunger + 0.03);
+
+  // Record exploration for family intel map
+  intelligenceRegistry.recordExploration(ctx.character.id, ctx.region.id, ctx.region, ctx.tick);
 
   const effects: ActionEffect[] = [];
   if (discovery.found && discovery.location) {
@@ -395,7 +502,12 @@ function handleForage(_action: AgentAction, ctx: ActionContext): ActionResult {
     : new RegExp(`${ANIMAL_FOOD_PATTERN.source}|${PLANT_FOOD_PATTERN.source}`, 'i'); // omnivore
 
   const hasFood = ctx.availableResources.some(r => foodPattern.test(r));
-  const success = hasFood && worldRNG.chance(0.7);
+  const forageCoeff = worldDrift.getCoefficient('foraging', ctx.tick);
+  const roleBonus = roleRegistry.getRoleBonus(ctx.character, 'forage');
+  const husbandryBonus = domesticationRegistry.getDomesticationBenefits(ctx.character.id)
+    .filter(b => b.type === 'food_production')
+    .reduce((s, b) => s + b.magnitude, 0);
+  const success = hasFood && worldRNG.chance(Math.min(0.95, 0.7 * forageCoeff + roleBonus + husbandryBonus));
 
   if (success) {
     // Consume a matching food resource
@@ -426,7 +538,7 @@ function handleForage(_action: AgentAction, ctx: ActionContext): ActionResult {
   };
 }
 
-function handleHunt(_action: AgentAction, ctx: ActionContext): ActionResult {
+function handleHunt(action: AgentAction, ctx: ActionContext): ActionResult {
   const mySpecies = speciesRegistry.get(ctx.character.speciesId);
   const diet = mySpecies?.traits.diet ?? 'omnivore';
 
@@ -449,9 +561,38 @@ function handleHunt(_action: AgentAction, ctx: ActionContext): ActionResult {
     : [];
 
   // Filter nearby characters to food web prey only
-  const validPrey = preySpeciesIds.length > 0
+  let validPrey = preySpeciesIds.length > 0
     ? ctx.nearbyCharacters.filter(c => preySpeciesIds.includes(c.speciesId) && c.isAlive)
     : ctx.nearbyCharacters.filter(c => c.isAlive); // fallback if no food web entries
+
+  // Selective targeting via params.target
+  const target = action.params.target as string | undefined;
+  if (target && validPrey.length > 0) {
+    switch (target) {
+      case 'injured':
+        validPrey = validPrey.filter(c => c.health < 0.5);
+        break;
+      case 'strongest':
+        validPrey = [...validPrey].sort((a, b) => getGeneValue(b, 'strength') - getGeneValue(a, 'strength'));
+        break;
+      case 'nearest':
+        // Just use first available (distance is simulated)
+        validPrey = validPrey.slice(0, 1);
+        break;
+      case 'weakest':
+        // Default behavior — sort by health ascending
+        break;
+      default: {
+        // Treat as species name filter
+        const speciesFilter = validPrey.filter(c => {
+          const sp = speciesRegistry.get(c.speciesId);
+          return sp?.commonName.toLowerCase().includes(target.toLowerCase());
+        });
+        if (speciesFilter.length > 0) validPrey = speciesFilter;
+        break;
+      }
+    }
+  }
 
   if (validPrey.length === 0) {
     return {
@@ -464,31 +605,46 @@ function handleHunt(_action: AgentAction, ctx: ActionContext): ActionResult {
 
   const strength = getGeneValue(ctx.character, 'strength');
   const speed = getGeneValue(ctx.character, 'speed');
+  const strengthCoeff = worldDrift.getCoefficient('combat_strength', ctx.tick);
+  const speedCoeff = worldDrift.getCoefficient('combat_speed', ctx.tick);
 
-  // Pick weakest valid prey
-  const prey = [...validPrey].sort((a, b) => a.health - b.health)[0];
+  // Pick weakest valid prey (unless already sorted by target preference)
+  const prey = target === 'strongest' || target === 'nearest'
+    ? validPrey[0]
+    : [...validPrey].sort((a, b) => a.health - b.health)[0];
   const preySpeed = getGeneValue(prey, 'speed');
   const preySize = getGeneValue(prey, 'size');
 
-  // Success based on predator strength/speed vs prey speed/size
-  const advantage = (strength + speed) - (preySpeed + preySize * 0.5);
-  const successChance = Math.max(0.1, Math.min(0.8, 0.4 + advantage * 0.003));
+  // Heartland hunt bonus — predators who know target's heartland get +15%
+  const heartlandBonus = heartlandTracker.getHeartlandHuntBonus(ctx.character.familyTreeId, ctx.region.id);
+
+  // Success based on predator strength/speed vs prey speed/size (drift-modified)
+  const advantage = (strength * strengthCoeff + speed * speedCoeff) - (preySpeed + preySize * 0.5);
+  const successChance = Math.max(0.1, Math.min(0.8, 0.4 + advantage * 0.003 + heartlandBonus));
   const success = worldRNG.chance(successChance);
 
   if (success) {
     const damage = strength * 0.015;
     prey.health = Math.max(0, prey.health - damage);
     if (prey.health <= 0) {
-      prey.isAlive = false;
-      prey.diedAtTick = ctx.tick;
       const predSpecies = speciesRegistry.get(ctx.character.speciesId);
-      prey.causeOfDeath = `hunted by ${predSpecies?.commonName ?? ctx.character.name}`;
+      characterRegistry.markDead(prey.id, ctx.tick, `hunted by ${predSpecies?.commonName ?? ctx.character.name}`);
+      corpseRegistry.createCorpse(prey, ctx.tick);
     }
   } else {
     // Failed hunt: counter-attack chance from larger prey
     if (preySize > getGeneValue(ctx.character, 'size') && worldRNG.chance(0.2)) {
       const counterDmg = getGeneValue(prey, 'strength') * 0.008;
       ctx.character.health = Math.max(0, ctx.character.health - counterDmg);
+      // Counter-attack creates encounter
+      if (ctx.character.isAlive) {
+        encounterRegistry.createEncounter(
+          ctx.character.id,
+          'rival_confrontation',
+          { predatorId: prey.id, threatLevel: preySize / 100 },
+          ctx.tick,
+        );
+      }
     }
   }
 
@@ -594,6 +750,38 @@ function handleCommunicate(action: AgentAction, ctx: ActionContext): ActionResul
   modifyRelationshipStrength(ctx.character, target.id, 0.05 * comm.clarity);
   modifyRelationshipStrength(target, ctx.character.id, 0.05 * comm.clarity);
 
+  // Cross-species communication skill learning
+  if (ctx.character.speciesId !== target.speciesId) {
+    // 30% chance to gain communication_skill for this species
+    if (worldRNG.chance(0.3)) {
+      const existingSkill = ctx.character.knowledge.filter(
+        k => k.topic === 'communication_skill' && k.detail === target.speciesId,
+      ).length;
+      if (existingSkill < 5) {
+        ctx.character.knowledge.push({
+          topic: 'communication_skill',
+          detail: target.speciesId,
+          learnedAtTick: ctx.tick,
+          source: 'experience',
+        });
+      }
+    }
+    // 20% reciprocal for target
+    if (worldRNG.chance(0.2)) {
+      const targetSkill = target.knowledge.filter(
+        k => k.topic === 'communication_skill' && k.detail === ctx.character.speciesId,
+      ).length;
+      if (targetSkill < 5) {
+        target.knowledge.push({
+          topic: 'communication_skill',
+          detail: ctx.character.speciesId,
+          learnedAtTick: ctx.tick,
+          source: 'experience',
+        });
+      }
+    }
+  }
+
   const clarityDesc = comm.clarity >= 0.8 ? 'clearly' :
     comm.clarity >= 0.5 ? 'with some difficulty' : 'through gestures and sounds';
 
@@ -691,9 +879,7 @@ function handleAttack(_action: AgentAction, ctx: ActionContext): ActionResult {
     const damage = strength * 0.01 + Math.max(0, sizeAdvantage * 0.001);
     target.health = Math.max(0, target.health - damage);
     if (target.health <= 0) {
-      target.isAlive = false;
-      target.diedAtTick = ctx.tick;
-      target.causeOfDeath = `killed by ${ctx.character.name}`;
+      characterRegistry.markDead(target.id, ctx.tick, `killed by ${ctx.character.name}`);
       fameTracker.recordAchievement(ctx.character, 'Killed an opponent', 5);
     }
     modifyRelationshipStrength(target, ctx.character.id, -0.3);
@@ -791,9 +977,7 @@ function handleBreed(_action: AgentAction, ctx: ActionContext): ActionResult {
 
     if (encounter.outcome === 'death') {
       // Kill the initiator
-      ctx.character.isAlive = false;
-      ctx.character.diedAtTick = ctx.tick;
-      ctx.character.causeOfDeath = `killed during cross-species encounter with ${sp2?.commonName ?? 'unknown'}`;
+      characterRegistry.markDead(ctx.character.id, ctx.tick, `killed during cross-species encounter with ${sp2?.commonName ?? 'unknown'}`);
 
       const funny = funnyNarrative(category, 'cross_breed_death', humorCtx);
       return {
@@ -815,6 +999,16 @@ function handleBreed(_action: AgentAction, ctx: ActionContext): ActionResult {
     }
 
     // success or new_species — proceed to breed
+  }
+
+  // Character cap check — prevent breeding if at maximum
+  if (tierManager.atCharacterCap) {
+    return {
+      success: false,
+      narrative: 'The world teems with life — no room for more individuals right now.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
   }
 
   const result = breed(ctx.character, mate, ctx.tick);
@@ -999,6 +1193,14 @@ function handleObserve(_action: AgentAction, ctx: ActionContext): ActionResult {
     }
   }
 
+  // Train observation skill
+  const ecosystem = getEcosystem();
+  const nearbyPredators = ecosystem ? ctx.nearbyCharacters.filter(c =>
+    ecosystem.foodWeb.some(e => e.predatorId === c.speciesId && e.preyId === ctx.character.speciesId),
+  ).length : 0;
+  const isNight = ctx.timeOfDay === 'night' || ctx.timeOfDay === 'dusk';
+  roleRegistry.trainObservation(ctx.character, ctx.tick, { isNight, nearbyPredators });
+
   return {
     success: true,
     narrative,
@@ -1068,6 +1270,380 @@ function handlePropose(action: AgentAction, ctx: ActionContext): ActionResult {
   };
 }
 
+function handleScavenge(action: AgentAction, ctx: ActionContext): ActionResult {
+  const corpses = ctx.corpses;
+  if (corpses.length === 0) {
+    return {
+      success: false,
+      narrative: `There are no remains to scavenge from nearby.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.04);
+
+  // Pick the freshest corpse with materials remaining
+  const corpse = corpses
+    .filter(c => c.materials.some(m => m.quantity > 0))
+    .sort((a, b) => b.diedAtTick - a.diedAtTick)[0];
+
+  if (!corpse) {
+    return {
+      success: false,
+      narrative: `The remains nearby have already been picked clean.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  // Harvest the first available material
+  const materialType = action.params.material as string | undefined;
+  const mat = materialType
+    ? corpse.materials.find(m => m.type === materialType && m.quantity > 0)
+    : corpse.materials.find(m => m.quantity > 0);
+
+  if (!mat) {
+    return {
+      success: false,
+      narrative: `No usable materials remain on the corpse.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const harvested = corpseRegistry.harvestFromCorpse(corpse.id, mat.type, 2);
+  if (harvested <= 0) {
+    return {
+      success: false,
+      narrative: `The material crumbles as you try to harvest it.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const species = speciesRegistry.get(corpse.speciesId);
+  const speciesName = species?.commonName ?? 'creature';
+
+  // Add material to inventory
+  ctx.character.inventory.push({
+    id: crypto.randomUUID(),
+    name: `${mat.type} from ${speciesName}`,
+    type: 'material',
+    properties: { materialType: mat.type, quality: mat.quality, quantity: harvested },
+    createdAtTick: ctx.tick,
+    createdBy: ctx.character.id,
+  });
+
+  // If biomass remains, also yield some food
+  const effects: ActionEffect[] = [];
+  if (corpse.biomassRemaining > 0) {
+    effects.push({ type: 'hunger_decrease', target: ctx.character.id, value: -0.15 });
+  }
+
+  return {
+    success: true,
+    narrative: `You harvest ${mat.type} from the remains of a ${speciesName}.`,
+    effects,
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleRespond(action: AgentAction, ctx: ActionContext): ActionResult {
+  const encounterId = action.params.encounterId as string;
+  const choice = action.params.choice as string;
+
+  if (!encounterId || !choice) {
+    // Try to respond to any active encounter
+    const active = encounterRegistry.getActiveEncounters(ctx.character.id);
+    if (active.length === 0) {
+      return {
+        success: false,
+        narrative: `There is nothing to respond to.`,
+        effects: [],
+        sensoryData: buildSensoryData(ctx),
+      };
+    }
+    const enc = active[0];
+    const resolution = encounterRegistry.resolveEncounter(enc.id, choice ?? 'flee', ctx.tick);
+    return {
+      success: resolution.success,
+      narrative: resolution.narrative,
+      effects: resolution.damage > 0
+        ? [{ type: 'damage_dealt', target: ctx.character.id, value: resolution.damage }]
+        : [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const resolution = encounterRegistry.resolveEncounter(encounterId, choice, ctx.tick);
+  return {
+    success: resolution.success,
+    narrative: resolution.narrative,
+    effects: resolution.damage > 0
+      ? [{ type: 'damage_dealt', target: ctx.character.id, value: resolution.damage }]
+      : [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleAssignRole(action: AgentAction, ctx: ActionContext): ActionResult {
+  const role = action.params.role as string;
+  const validRoles = ['sentinel', 'scout', 'forager', 'guardian', 'healer', 'spy', 'none'];
+  if (!role || !validRoles.includes(role)) {
+    return {
+      success: false,
+      narrative: `Invalid role. Available roles: ${validRoles.join(', ')}.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const result = roleRegistry.assignRole(ctx.character.id, role as any, ctx.tick);
+  const success = result.includes('assigned');
+
+  return {
+    success,
+    narrative: result,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleDomesticate(action: AgentAction, ctx: ActionContext): ActionResult {
+  const targetSpecies = action.params.species as string | undefined;
+  const desiredType = action.params.type as string | undefined;
+
+  // Find target: by species name or nearest non-same-species
+  let target = ctx.nearbyCharacters.find(c => {
+    if (c.speciesId === ctx.character.speciesId) return false;
+    if (!c.isAlive) return false;
+    if (targetSpecies) {
+      const sp = speciesRegistry.get(c.speciesId);
+      return sp?.commonName.toLowerCase().includes(targetSpecies.toLowerCase());
+    }
+    return true;
+  });
+
+  if (!target) {
+    return {
+      success: false,
+      narrative: 'There is no suitable creature nearby to domesticate.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.1);
+
+  const attempt = domesticationRegistry.attemptDomestication(
+    ctx.character, target,
+    desiredType as any,
+    ctx.tick,
+  );
+
+  return {
+    success: attempt.success,
+    narrative: attempt.narrative,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleSpy(action: AgentAction, ctx: ActionContext): ActionResult {
+  if (espionageRegistry.isOnMission(ctx.character.id)) {
+    return {
+      success: false,
+      narrative: 'You are already on an espionage mission.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const targetRegion = (action.params.regionId as string) ?? ctx.region.id;
+  const targetFamily = action.params.targetFamilyId as string | undefined;
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.08);
+
+  const mission = espionageRegistry.startMission({
+    type: 'spy',
+    agentCharacterId: ctx.character.id,
+    targetRegionId: targetRegion,
+    targetFamilyId: targetFamily,
+    tick: ctx.tick,
+  });
+
+  return {
+    success: true,
+    narrative: `You begin a covert reconnaissance mission. Stay hidden and observe.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleInfiltrate(action: AgentAction, ctx: ActionContext): ActionResult {
+  if (espionageRegistry.isOnMission(ctx.character.id)) {
+    return {
+      success: false,
+      narrative: 'You are already on an espionage mission.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const targetRegion = (action.params.regionId as string) ?? ctx.region.id;
+  const targetFamily = action.params.targetFamilyId as string | undefined;
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.12);
+
+  espionageRegistry.startMission({
+    type: 'infiltrate',
+    agentCharacterId: ctx.character.id,
+    targetRegionId: targetRegion,
+    targetFamilyId: targetFamily,
+    tick: ctx.tick,
+  });
+
+  return {
+    success: true,
+    narrative: `You begin a deep infiltration mission. This will take time but may reveal heartland territories.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleSpreadRumors(action: AgentAction, ctx: ActionContext): ActionResult {
+  if (espionageRegistry.isOnMission(ctx.character.id)) {
+    return {
+      success: false,
+      narrative: 'You are already on an espionage mission.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const targetRegion = (action.params.regionId as string) ?? ctx.region.id;
+  const targetFamily = action.params.targetFamilyId as string | undefined;
+
+  if (!targetFamily) {
+    return {
+      success: false,
+      narrative: 'You must specify a target family to spread rumors about.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.06);
+
+  espionageRegistry.startMission({
+    type: 'spread_rumors',
+    agentCharacterId: ctx.character.id,
+    targetRegionId: targetRegion,
+    targetFamilyId: targetFamily,
+    tick: ctx.tick,
+  });
+
+  return {
+    success: true,
+    narrative: `You begin planting false information to mislead the target family.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleCounterSpy(_action: AgentAction, ctx: ActionContext): ActionResult {
+  if (espionageRegistry.isOnMission(ctx.character.id)) {
+    return {
+      success: false,
+      narrative: 'You are already on an espionage mission.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.05);
+
+  // Attempt to detect any active spy missions in this region
+  const detected = espionageRegistry.attemptDetection(ctx.character, ctx.region.id, ctx.tick);
+
+  if (detected) {
+    const spy = characterRegistry.get(detected.agentCharacterId);
+    const spySpecies = spy ? speciesRegistry.get(spy.speciesId) : null;
+
+    // Create spy_detected encounter
+    encounterRegistry.createEncounter(
+      ctx.character.id,
+      'spy_detected',
+      { predatorId: spy?.id, threatLevel: 0.3 },
+      ctx.tick,
+    );
+
+    return {
+      success: true,
+      narrative: `You detect a ${spySpecies?.commonName ?? 'creature'} conducting espionage in the area! Their family identity has been exposed.`,
+      effects: [{ type: 'fame_increase', target: ctx.character.id, value: 3 }],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  return {
+    success: true,
+    narrative: `You scan the area for signs of espionage. The area appears clean.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleBetray(action: AgentAction, ctx: ActionContext): ActionResult {
+  const victimFamilyId = action.params.victimFamilyId as string | undefined;
+  const beneficiaryFamilyId = action.params.beneficiaryFamilyId as string | undefined;
+  const betrayalType = (action.params.type as string) ?? 'intel_leak';
+
+  if (!victimFamilyId) {
+    return {
+      success: false,
+      narrative: 'You must specify a victim family to betray.',
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const validTypes = ['intel_leak', 'heartland_reveal', 'alliance_backstab', 'false_intel', 'resource_theft'];
+  if (!validTypes.includes(betrayalType)) {
+    return {
+      success: false,
+      narrative: `Invalid betrayal type. Options: ${validTypes.join(', ')}.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.1);
+
+  const event = betrayalRegistry.commitBetrayal({
+    betrayerFamilyId: ctx.character.familyTreeId,
+    betrayerCharacterId: ctx.character.id,
+    victimFamilyId,
+    beneficiaryFamilyId,
+    type: betrayalType as any,
+    tick: ctx.tick,
+    regionId: ctx.region.id,
+  });
+
+  const witnessCount = event.witnessFamilyIds.length;
+  const witnessWarning = witnessCount > 0
+    ? ` ${witnessCount} families witnessed the betrayal.`
+    : '';
+
+  return {
+    success: true,
+    narrative: `You commit an act of ${betrayalType.replace(/_/g, ' ')}.${witnessWarning} Trust has been broken.`,
+    effects: [{ type: 'fame_increase', target: ctx.character.id, value: 2 }],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
 /** Patterns that indicate animal-based food */
 const ANIMAL_FOOD_PATTERN = /fish|salmon|tuna|herring|sardine|krill|shrimp|crab|shellfish|squid|insect|worm|carrion|meat|egg|prey|rodent|mammal|bird|tilapia|lobster|clam|mussel|oyster|octopus|seal|whale|deer|rabbit|snake|frog|lizard|caribou|pike|abalone|eland|wombat|king_crab|elephant_seal|walrus|penguin|albatross|jellyfish|sturgeon|crawfish|catfish|trout|bass|anchov/i;
 /** Patterns that indicate plant-based food */
@@ -1112,4 +1688,92 @@ function buildSensoryData(ctx: ActionContext, enhanced: boolean = false): Sensor
     threats: ctx.threats,
     opportunities: relevantResources.slice(0, 3),
   };
+}
+
+// ============================================================
+// Colony Actions — Swarm Mode
+// ============================================================
+
+function getCharacterColony(ctx: ActionContext) {
+  return colonyRegistry.getByRegion(ctx.region.id)
+    .find(c => c.speciesId === ctx.character.speciesId);
+}
+
+function handleColonyForage(_action: AgentAction, ctx: ActionContext): ActionResult {
+  const colony = getCharacterColony(ctx);
+  if (!colony) {
+    return { success: false, narrative: 'No colony found in this region.', effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  const successRate = worldRNG.float(0.3, 1.0);
+  colonyForage(colony, successRate);
+  return {
+    success: true,
+    narrative: `The colony's foragers return with provisions. Stores now at ${Math.round(colony.health.provisions * 100)}%.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleColonyDefend(_action: AgentAction, ctx: ActionContext): ActionResult {
+  const colony = getCharacterColony(ctx);
+  if (!colony) {
+    return { success: false, narrative: 'No colony found in this region.', effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  const threatLevel = ctx.threats.length > 0 ? 0.3 : 0.05;
+  colonyDefend(colony, threatLevel);
+  return {
+    success: true,
+    narrative: ctx.threats.length > 0
+      ? `The soldiers of ${colony.name} rally against threats. The colony holds.`
+      : `The colony guards patrol the perimeter. All is quiet.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleColonyExpand(action: AgentAction, ctx: ActionContext): ActionResult {
+  const colony = getCharacterColony(ctx);
+  if (!colony) {
+    return { success: false, narrative: 'No colony found in this region.', effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  if (colony.health.provisions < 0.3) {
+    return { success: false, narrative: `${colony.name} cannot expand — insufficient provisions.`, effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  colony.workerCount += Math.floor(worldRNG.float(2, 8));
+  colony.health.provisions = Math.max(0, colony.health.provisions - 0.05);
+  return {
+    success: true,
+    narrative: `${colony.name} extends its territory. New tunnels and chambers take shape.`,
+    effects: [],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
+function handleColonyConstruct(_action: AgentAction, ctx: ActionContext): ActionResult {
+  const colony = getCharacterColony(ctx);
+  if (!colony) {
+    return { success: false, narrative: 'No colony found in this region.', effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  const narrative = colonyConstruct(colony);
+  if (!narrative) {
+    return { success: false, narrative: `${colony.name} lacks the provisions to build.`, effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  return { success: true, narrative, effects: [], sensoryData: buildSensoryData(ctx) };
+}
+
+function handleColonyReproduce(_action: AgentAction, ctx: ActionContext): ActionResult {
+  const colony = getCharacterColony(ctx);
+  if (!colony) {
+    return { success: false, narrative: 'No colony found in this region.', effects: [], sensoryData: buildSensoryData(ctx) };
+  }
+  const narrative = colonyReproduce(colony);
+  if (!narrative) {
+    return {
+      success: false,
+      narrative: colony.queenId ? `${colony.name} cannot reproduce — provisions too low.` : `${colony.name} has no queen to produce offspring.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+  return { success: true, narrative, effects: [], sensoryData: buildSensoryData(ctx) };
 }

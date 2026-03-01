@@ -9,47 +9,47 @@ export function seedTaxonomy(): void {
   // === CLASSES ===
   taxonomyEngine.register({
     rank: 'class', name: 'Mammalia', parentName: null,
-    traits: { intelligence: 30, socialStructure: 'pack', diet: 'omnivore' },
+    traits: { intelligence: 30, socialStructure: 'pack', diet: 'omnivore', metabolicRate: 1.0 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Aves', parentName: null,
-    traits: { canFly: true, speed: 70, perception: { visualRange: 80, hearingRange: 40, smellRange: 10, echolocation: false, electroreception: false, thermalSensing: false } },
+    traits: { canFly: true, speed: 70, metabolicRate: 2.5, perception: { visualRange: 80, hearingRange: 40, smellRange: 10, echolocation: false, electroreception: false, thermalSensing: false } },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Reptilia', parentName: null,
-    traits: { speed: 30, lifespan: 17280, perception: { visualRange: 40, hearingRange: 20, smellRange: 60, echolocation: false, electroreception: false, thermalSensing: true } },
+    traits: { speed: 30, lifespan: 17280, metabolicRate: 0.5, perception: { visualRange: 40, hearingRange: 20, smellRange: 60, echolocation: false, electroreception: false, thermalSensing: true } },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Actinopterygii', parentName: null,
-    traits: { aquatic: true, habitat: ['underwater'], speed: 60 },
+    traits: { aquatic: true, habitat: ['underwater'], speed: 60, metabolicRate: 0.8 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Insecta', parentName: null,
-    traits: { size: 2, lifespan: 480, reproductionRate: 50, socialStructure: 'hive', speed: 40 },
+    traits: { size: 2, lifespan: 480, reproductionRate: 50, socialStructure: 'hive', speed: 40, metabolicRate: 3.0 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Arachnida', parentName: null,
-    traits: { size: 3, lifespan: 720, diet: 'carnivore' },
+    traits: { size: 3, lifespan: 720, diet: 'carnivore', metabolicRate: 2.5 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Malacostraca', parentName: null,
-    traits: { aquatic: true, habitat: ['underwater'], size: 10 },
+    traits: { aquatic: true, habitat: ['underwater'], size: 10, metabolicRate: 1.0 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Chondrichthyes', parentName: null,
-    traits: { aquatic: true, habitat: ['underwater'], diet: 'carnivore', size: 70, speed: 70 },
+    traits: { aquatic: true, habitat: ['underwater'], diet: 'carnivore', size: 70, speed: 70, metabolicRate: 0.6 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Amphibia', parentName: null,
-    traits: { size: 8, lifespan: 8640, diet: 'carnivore', habitat: ['surface'], aquatic: false, speed: 25 },
+    traits: { size: 8, lifespan: 8640, diet: 'carnivore', habitat: ['surface'], aquatic: false, speed: 25, metabolicRate: 1.5 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Cephalopoda', parentName: null,
-    traits: { aquatic: true, habitat: ['underwater'], intelligence: 30, diet: 'carnivore', size: 30 },
+    traits: { aquatic: true, habitat: ['underwater'], intelligence: 30, diet: 'carnivore', size: 30, metabolicRate: 1.2 },
   });
   taxonomyEngine.register({
     rank: 'class', name: 'Gastropoda', parentName: null,
-    traits: { size: 5, speed: 5, lifespan: 4320, diet: 'herbivore', habitat: ['surface'] },
+    traits: { size: 5, speed: 5, lifespan: 4320, diet: 'herbivore', habitat: ['surface'], metabolicRate: 0.3 },
   });
 
   // === ORDERS ===
@@ -67,23 +67,23 @@ export function seedTaxonomy(): void {
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Rodentia', parentName: 'Mammalia',
-    traits: { size: 5, reproductionRate: 6, lifespan: 1728 },
+    traits: { size: 5, reproductionRate: 6, lifespan: 1728, metabolicRate: 2.5 },
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Cetacea', parentName: 'Mammalia',
-    traits: { aquatic: true, habitat: ['underwater'], size: 90, intelligence: 50, socialStructure: 'pack' },
+    traits: { aquatic: true, habitat: ['underwater'], size: 90, intelligence: 50, socialStructure: 'pack', metabolicRate: 0.4 },
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Chiroptera', parentName: 'Mammalia',
-    traits: { canFly: true, nocturnal: true, size: 5, perception: { visualRange: 20, hearingRange: 90, smellRange: 30, echolocation: true, electroreception: false, thermalSensing: false } },
+    traits: { canFly: true, nocturnal: true, size: 5, metabolicRate: 2.5, perception: { visualRange: 20, hearingRange: 90, smellRange: 30, echolocation: true, electroreception: false, thermalSensing: false } },
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Proboscidea', parentName: 'Mammalia',
-    traits: { size: 95, strength: 90, intelligence: 50, socialStructure: 'herd', lifespan: 51840 },
+    traits: { size: 95, strength: 90, intelligence: 50, socialStructure: 'herd', lifespan: 51840, metabolicRate: 0.3 },
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Passeriformes', parentName: 'Aves',
-    traits: { size: 5, socialStructure: 'pack' },
+    traits: { size: 5, socialStructure: 'pack', metabolicRate: 3.0 },
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Accipitriformes', parentName: 'Aves',
@@ -132,7 +132,7 @@ export function seedTaxonomy(): void {
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Lagomorpha', parentName: 'Mammalia',
-    traits: { size: 10, speed: 55, diet: 'herbivore', reproductionRate: 6 },
+    traits: { size: 10, speed: 55, diet: 'herbivore', reproductionRate: 6, metabolicRate: 2.0 },
   });
   taxonomyEngine.register({
     rank: 'order', name: 'Erinaceomorpha', parentName: 'Mammalia',

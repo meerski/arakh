@@ -108,4 +108,5 @@ export class GameRNG {
 }
 
 // Global RNG instance — inject entropy each tick
-export const worldRNG = new GameRNG();
+export let worldRNG = new GameRNG();
+export function _installWorldRNG(instance: GameRNG): void { worldRNG = instance; }

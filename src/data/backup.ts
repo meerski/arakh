@@ -138,7 +138,9 @@ export class WorldSerializer {
   }
 }
 
-export const worldSerializer = new WorldSerializer();
+export let worldSerializer = new WorldSerializer();
+
+export function _installWorldSerializer(instance: WorldSerializer): void { worldSerializer = instance; }
 
 // --- Backup Manager ---
 

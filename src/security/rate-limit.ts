@@ -44,4 +44,6 @@ export class RateLimiter {
   }
 }
 
-export const rateLimiter = new RateLimiter();
+export let rateLimiter = new RateLimiter();
+
+export function _installRateLimiter(instance: RateLimiter): void { rateLimiter = instance; }

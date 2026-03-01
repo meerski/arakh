@@ -277,6 +277,7 @@ export function createHybridSpecies(species1: Species, species2: Species): Speci
     nocturnal: worldRNG.chance(0.5) ? t1.nocturnal : t2.nocturnal,
     aquatic: t1.aquatic || t2.aquatic,
     canFly: t1.canFly && t2.canFly, // both must fly
+    metabolicRate: +(t1.metabolicRate * w1 + t2.metabolicRate * w2).toFixed(2),
   };
 
   // Taxonomy: new genus under the closer parent's family

@@ -34,6 +34,12 @@ export class CardCollection {
   count(): number {
     return this.cards.size;
   }
+
+  restoreCard(card: Card): void {
+    this.cards.set(card.id, card);
+  }
 }
 
-export const cardCollection = new CardCollection();
+export let cardCollection = new CardCollection();
+
+export function _installCardCollection(instance: CardCollection): void { cardCollection = instance; }
