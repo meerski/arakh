@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import type { SimulationLoop } from '../simulation/loop.js';
 import type { GameTime } from '../types.js';
 import { speciesRegistry } from '../species/species.js';
+import { characterRegistry } from '../species/registry.js';
 import { cardCollection } from '../cards/collection.js';
 import { playerManager } from '../game/player.js';
 import { fameTracker } from '../game/fame.js';
@@ -140,6 +141,41 @@ export function createAPI(simulation: SimulationLoop) {
   // Global live feed
   app.get('/feed', async () => {
     return liveFeed.getAll(50);
+  });
+
+  // Admin: list regions (first 5 with names)
+  app.get('/admin/regions', async () => {
+    const world = simulation.getWorld();
+    const result: { id: string; name: string }[] = [];
+    for (const [id, region] of world.regions) {
+      result.push({ id, name: region.name });
+      if (result.length >= 10) break;
+    }
+    return { total: world.regions.size, sample: result };
+  });
+
+  // Admin: teleport a character to a region (for testing)
+  app.post<{ Body: { characterId: string; regionId: string } }>('/admin/teleport', async (request) => {
+    const { characterId, regionId } = request.body;
+    const character = characterRegistry.get(characterId);
+    if (!character) return { error: 'Character not found', characterId };
+    const world = simulation.getWorld();
+    const region = world.regions.get(regionId);
+    character.regionId = regionId;
+    return {
+      success: true,
+      name: character.name,
+      region: region?.name ?? 'unknown',
+      regionFound: !!region,
+      worldRegionCount: world.regions.size,
+      requestedRegionId: regionId,
+    };
+  });
+
+  // Admin: list all characters in a region
+  app.get<{ Params: { regionId: string } }>('/admin/region/:regionId/characters', async (request) => {
+    const chars = characterRegistry.getByRegion(request.params.regionId);
+    return chars.map(c => ({ id: c.id, name: c.name, speciesId: c.speciesId, isAlive: c.isAlive }));
   });
 
   return app;

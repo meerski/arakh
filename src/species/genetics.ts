@@ -25,9 +25,26 @@ export function canBreed(a: Character, b: Character): BreedingResult {
     return { canBreed: false, reason: 'Same sex cannot breed' };
   }
 
-  // Must be same species (inter-species breeding is extremely rare)
+  // Cross-species breeding: strict habitat + size gates
   if (a.speciesId !== b.speciesId) {
-    if (!worldRNG.chance(0.001)) {
+    const spA = speciesRegistry.get(a.speciesId);
+    const spB = speciesRegistry.get(b.speciesId);
+    if (!spA || !spB) return { canBreed: false, reason: 'Unknown species' };
+
+    // Hard habitat check — must share at least one habitat layer
+    const sharedHabitat = spA.traits.habitat.some(h => spB.traits.habitat.includes(h));
+    if (!sharedHabitat) {
+      return { canBreed: false, reason: 'Incompatible habitats' };
+    }
+
+    // Size compatibility — max 2x size ratio for cross-species breeding
+    const sizeRatio = Math.max(spA.traits.size, spB.traits.size) / Math.max(1, Math.min(spA.traits.size, spB.traits.size));
+    if (sizeRatio > 2) {
+      return { canBreed: false, reason: 'Size difference too great' };
+    }
+
+    // 1% chance of cross-species attempt
+    if (!worldRNG.chance(0.01)) {
       return { canBreed: false, reason: 'Different species' };
     }
   }
@@ -81,6 +98,8 @@ export function calculateOffspringGenetics(parent1: Pick<Character, 'genetics'>,
   const g1 = parent1.genetics;
   const g2 = parent2.genetics;
 
+  const mutRate = (g1.mutationRate + g2.mutationRate) / 2;
+
   const genes = g1.genes.map((gene, i) => {
     const otherGene = g2.genes[i];
     if (!otherGene) return { ...gene };
@@ -93,7 +112,6 @@ export function calculateOffspringGenetics(parent1: Pick<Character, 'genetics'>,
     let value = source.value;
 
     // Mutation
-    const mutRate = (g1.mutationRate + g2.mutationRate) / 2;
     if (rng.chance(mutRate)) {
       value += rng.gaussian(0, 8);
     }
@@ -109,9 +127,25 @@ export function calculateOffspringGenetics(parent1: Pick<Character, 'genetics'>,
     };
   });
 
+  // Handle genes that exist in parent2 but not parent1 (e.g., appearance genes)
+  if (g2.genes.length > g1.genes.length) {
+    for (let i = g1.genes.length; i < g2.genes.length; i++) {
+      const gene = g2.genes[i];
+      let value = gene.value;
+      if (rng.chance(mutRate)) {
+        value += rng.gaussian(0, 8);
+      }
+      genes.push({
+        trait: gene.trait,
+        value: Math.max(0, Math.min(100, value)),
+        dominant: rng.chance(0.5),
+      });
+    }
+  }
+
   return {
     genes,
-    mutationRate: Math.max(0.01, (g1.mutationRate + g2.mutationRate) / 2 + rng.gaussian(0, 0.005)),
+    mutationRate: Math.max(0.01, mutRate + rng.gaussian(0, 0.005)),
   };
 }
 
@@ -142,9 +176,16 @@ export function evaluateCrossSpeciesEncounter(
   const sp2 = speciesRegistry.get(target.speciesId);
   if (!sp1 || !sp2) return { outcome: 'rejection' };
 
+  // Hard habitat gate — reject immediately if no shared habitat
+  const sharedHabitat = sp1.traits.habitat.some(h => sp2.traits.habitat.includes(h));
+  if (!sharedHabitat) return { outcome: 'rejection' };
+
+  // Hard size gate — reject immediately if size ratio > 2
+  const sizeRatio = Math.max(sp1.traits.size, sp2.traits.size) / Math.max(1, Math.min(sp1.traits.size, sp2.traits.size));
+  if (sizeRatio > 2) return { outcome: 'rejection' };
+
   // Size difference makes it more dangerous for the smaller one
   const sizeDiff = Math.abs(sp1.traits.size - sp2.traits.size);
-  const initiatorSmaller = sp1.traits.size < sp2.traits.size;
 
   // Base danger: large size difference + carnivore target = very dangerous
   let deathChance = 0.3; // base 30%
@@ -170,8 +211,7 @@ export function evaluateCrossSpeciesEncounter(
     deathChance -= rel.strength * 0.3;
   }
 
-  // Same habitat = slightly safer
-  const sharedHabitat = sp1.traits.habitat.some(h => sp2.traits.habitat.includes(h));
+  // Shared habitat = slightly safer
   if (sharedHabitat) deathChance -= 0.05;
 
   // Clamp
@@ -184,10 +224,11 @@ export function evaluateCrossSpeciesEncounter(
     return { outcome: 'death', deathTarget: 'initiator' };
   }
 
-  // Remaining probability split: ~75% rejection, ~20% success, ~5% new species
+  // Adjusted probabilities: 95% rejection, 4.5% success, 0.5% new species
+  // (of the 1% cross-species attempts, only ~5% produce offspring)
   const remaining = 1 - deathChance;
-  const rejectThreshold = deathChance + remaining * 0.75;
-  const successThreshold = deathChance + remaining * 0.95;
+  const rejectThreshold = deathChance + remaining * 0.95;
+  const successThreshold = deathChance + remaining * 0.995;
 
   if (roll < rejectThreshold) {
     return { outcome: 'rejection' };

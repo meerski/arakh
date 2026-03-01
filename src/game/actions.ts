@@ -18,6 +18,7 @@ import { characterRegistry } from '../species/registry.js';
 import { addBidirectionalRelationship, modifyRelationshipStrength } from './social.js';
 import { fameTracker } from './fame.js';
 import { speciesRegistry } from '../species/species.js';
+import { getEcosystem } from '../simulation/ecosystem.js';
 
 export interface ActionContext {
   character: Character;
@@ -47,8 +48,17 @@ export function buildActionContext(
   const region = regions.get(character.regionId);
   if (!region) return null;
 
+  // Filter nearby characters by compatible habitat layers (hard block)
+  const charSpecies = speciesRegistry.get(character.speciesId);
+  const charHabitat = charSpecies?.traits.habitat ?? ['surface'];
+
   const nearbyCharacters = characterRegistry.getByRegion(character.regionId)
-    .filter(c => c.id !== character.id);
+    .filter(c => c.id !== character.id)
+    .filter(c => {
+      const otherSpecies = speciesRegistry.get(c.speciesId);
+      const otherHabitat = otherSpecies?.traits.habitat ?? ['surface'];
+      return charHabitat.some(h => otherHabitat.includes(h));
+    });
 
   const availableResources = region.resources
     .filter(r => r.quantity > 0)
@@ -233,6 +243,61 @@ export function applyEffects(effects: ActionEffect[], ctx: ActionContext): void 
   }
 }
 
+// ============================================================
+// Predator Encounter Check — shared by risky actions
+// ============================================================
+
+/** Check for a predator encounter during a risky action. Returns an ActionResult if encounter fires, null otherwise. */
+export function checkPredatorEncounter(ctx: ActionContext, riskLevel: number): ActionResult | null {
+  const ecosystem = getEcosystem();
+  if (!ecosystem) return null;
+
+  const predators = ctx.nearbyCharacters.filter(c => {
+    return ecosystem.foodWeb.some(e => e.predatorId === c.speciesId && e.preyId === ctx.character.speciesId);
+  });
+
+  if (predators.length === 0 || !worldRNG.chance(riskLevel)) return null;
+
+  // Speed/perception check to escape
+  const speed = getGeneValue(ctx.character, 'speed');
+  const escaped = worldRNG.chance(0.3 + speed * 0.005);
+
+  if (escaped) {
+    const predSpecies = speciesRegistry.get(predators[0].speciesId);
+    return {
+      success: false,
+      narrative: `You sense a ${predSpecies?.commonName ?? 'predator'} nearby and narrowly escape!`,
+      effects: [{ type: 'energy_decrease', target: ctx.character.id, value: -0.05 }],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const predator = worldRNG.pick(predators);
+  const damage = getGeneValue(predator, 'strength') * 0.012;
+  ctx.character.health = Math.max(0, ctx.character.health - damage);
+
+  if (ctx.character.health <= 0) {
+    ctx.character.isAlive = false;
+    ctx.character.diedAtTick = ctx.tick;
+    const predSpecies = speciesRegistry.get(predator.speciesId);
+    ctx.character.causeOfDeath = `killed by ${predSpecies?.commonName ?? 'a predator'} while exploring`;
+    return {
+      success: false,
+      narrative: `A ${predSpecies?.commonName ?? 'predator'} strikes from the shadows. You do not survive the encounter.`,
+      effects: [{ type: 'damage_dealt', target: ctx.character.id, value: damage }],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const predSpecies = speciesRegistry.get(predator.speciesId);
+  return {
+    success: false,
+    narrative: `A ${predSpecies?.commonName ?? 'predator'} attacks you! You escape wounded.`,
+    effects: [{ type: 'damage_dealt', target: ctx.character.id, value: damage }],
+    sensoryData: buildSensoryData(ctx),
+  };
+}
+
 type ActionHandler = (action: AgentAction, context: ActionContext) => ActionResult;
 
 const ACTION_HANDLERS: Record<ActionType, ActionHandler> = {
@@ -260,6 +325,10 @@ const ACTION_HANDLERS: Record<ActionType, ActionHandler> = {
 };
 
 function handleMove(action: AgentAction, ctx: ActionContext): ActionResult {
+  // Predator encounter risk while moving (5%)
+  const encounter = checkPredatorEncounter(ctx, 0.05);
+  if (encounter) return encounter;
+
   const direction = (action.params.direction as string) ?? 'forward';
   const speed = getGeneValue(ctx.character, 'speed');
   const success = worldRNG.chance(0.8 + speed * 0.002);
@@ -281,6 +350,10 @@ function handleMove(action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleExplore(_action: AgentAction, ctx: ActionContext): ActionResult {
+  // Predator encounter risk while exploring (15%)
+  const encounter = checkPredatorEncounter(ctx, 0.15);
+  if (encounter) return encounter;
+
   // Wire into the real discovery system
   const discovery = attemptDiscovery(ctx.character, ctx.region);
 
@@ -303,6 +376,14 @@ function handleExplore(_action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleForage(_action: AgentAction, ctx: ActionContext): ActionResult {
+  // Predator encounter risk while foraging (10%)
+  const encounter = checkPredatorEncounter(ctx, 0.10);
+  if (encounter) return encounter;
+
+  // Energy/hunger cost for searching for food
+  ctx.character.energy = Math.max(0, ctx.character.energy - 0.04);
+  ctx.character.hunger = Math.min(1, ctx.character.hunger + 0.01);
+
   const species = speciesRegistry.get(ctx.character.speciesId);
   const diet = species?.traits.diet ?? 'omnivore';
 
@@ -346,24 +427,68 @@ function handleForage(_action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleHunt(_action: AgentAction, ctx: ActionContext): ActionResult {
-  const strength = getGeneValue(ctx.character, 'strength');
-  const speed = getGeneValue(ctx.character, 'speed');
-  const hasPrey = ctx.nearbyCharacters.length > 0;
-  const success = hasPrey && worldRNG.chance(0.3 + (strength + speed) * 0.002);
+  const mySpecies = speciesRegistry.get(ctx.character.speciesId);
+  const diet = mySpecies?.traits.diet ?? 'omnivore';
+
+  // Herbivores can't hunt
+  if (diet === 'herbivore' || diet === 'filter_feeder' || diet === 'detritivore') {
+    return {
+      success: false,
+      narrative: `Your species doesn't hunt.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
 
   ctx.character.energy = Math.max(0, ctx.character.energy - 0.1);
 
+  // Use food web to find valid prey species
+  const ecosystem = getEcosystem();
+  const preySpeciesIds = ecosystem
+    ? ecosystem.foodWeb.filter(e => e.predatorId === ctx.character.speciesId).map(e => e.preyId)
+    : [];
+
+  // Filter nearby characters to food web prey only
+  const validPrey = preySpeciesIds.length > 0
+    ? ctx.nearbyCharacters.filter(c => preySpeciesIds.includes(c.speciesId) && c.isAlive)
+    : ctx.nearbyCharacters.filter(c => c.isAlive); // fallback if no food web entries
+
+  if (validPrey.length === 0) {
+    return {
+      success: false,
+      narrative: `You stalk the area, but no suitable prey is nearby.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
+
+  const strength = getGeneValue(ctx.character, 'strength');
+  const speed = getGeneValue(ctx.character, 'speed');
+
+  // Pick weakest valid prey
+  const prey = [...validPrey].sort((a, b) => a.health - b.health)[0];
+  const preySpeed = getGeneValue(prey, 'speed');
+  const preySize = getGeneValue(prey, 'size');
+
+  // Success based on predator strength/speed vs prey speed/size
+  const advantage = (strength + speed) - (preySpeed + preySize * 0.5);
+  const successChance = Math.max(0.1, Math.min(0.8, 0.4 + advantage * 0.003));
+  const success = worldRNG.chance(successChance);
+
   if (success) {
-    // Pick the weakest nearby character as prey
-    const prey = [...ctx.nearbyCharacters].sort((a, b) => a.health - b.health)[0];
-    if (prey) {
-      const damage = strength * 0.015;
-      prey.health = Math.max(0, prey.health - damage);
-      if (prey.health <= 0) {
-        prey.isAlive = false;
-        prey.diedAtTick = ctx.tick;
-        prey.causeOfDeath = `hunted by ${ctx.character.name}`;
-      }
+    const damage = strength * 0.015;
+    prey.health = Math.max(0, prey.health - damage);
+    if (prey.health <= 0) {
+      prey.isAlive = false;
+      prey.diedAtTick = ctx.tick;
+      const predSpecies = speciesRegistry.get(ctx.character.speciesId);
+      prey.causeOfDeath = `hunted by ${predSpecies?.commonName ?? ctx.character.name}`;
+    }
+  } else {
+    // Failed hunt: counter-attack chance from larger prey
+    if (preySize > getGeneValue(ctx.character, 'size') && worldRNG.chance(0.2)) {
+      const counterDmg = getGeneValue(prey, 'strength') * 0.008;
+      ctx.character.health = Math.max(0, ctx.character.health - counterDmg);
     }
   }
 
@@ -380,6 +505,10 @@ function handleHunt(_action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleRest(_action: AgentAction, ctx: ActionContext): ActionResult {
+  // Predator encounter risk while resting (3%)
+  const encounter = checkPredatorEncounter(ctx, 0.03);
+  if (encounter) return encounter;
+
   return {
     success: true,
     narrative: `You rest, recovering your strength.`,
@@ -525,15 +654,41 @@ function handleAlly(_action: AgentAction, ctx: ActionContext): ActionResult {
 }
 
 function handleAttack(_action: AgentAction, ctx: ActionContext): ActionResult {
-  const strength = getGeneValue(ctx.character, 'strength');
-  const aggression = getGeneValue(ctx.character, 'aggression');
   const target = ctx.nearbyCharacters[0];
-  const success = target && worldRNG.chance(0.3 + (strength + aggression) * 0.003);
+  if (!target) {
+    return {
+      success: false,
+      narrative: `There is nothing nearby to attack.`,
+      effects: [],
+      sensoryData: buildSensoryData(ctx),
+    };
+  }
 
   ctx.character.energy = Math.max(0, ctx.character.energy - 0.12);
 
-  if (success && target) {
-    const damage = strength * 0.01;
+  const strength = getGeneValue(ctx.character, 'strength');
+  const mySize = getGeneValue(ctx.character, 'size');
+  const targetStrength = getGeneValue(target, 'strength');
+  const targetSize = getGeneValue(target, 'size');
+
+  // Check for hostile/rival relationship or same-species rivalry
+  const rel = ctx.character.relationships.find(r => r.targetId === target.id);
+  const isHostile = rel && rel.strength < -0.3;
+  const isSameSpecies = ctx.character.speciesId === target.speciesId;
+
+  // Unprovoked cross-species attack: lower success, triggers enmity
+  let successMod = 0;
+  if (!isHostile && !isSameSpecies) {
+    successMod = -0.15;
+  }
+
+  // Smaller attacker vs larger target: disadvantage + counter-damage risk
+  const sizeAdvantage = mySize - targetSize;
+  const baseSucessChance = 0.3 + (strength * 0.003) + (sizeAdvantage * 0.002) + successMod;
+  const success = worldRNG.chance(Math.max(0.05, Math.min(0.85, baseSucessChance)));
+
+  if (success) {
+    const damage = strength * 0.01 + Math.max(0, sizeAdvantage * 0.001);
     target.health = Math.max(0, target.health - damage);
     if (target.health <= 0) {
       target.isAlive = false;
@@ -541,16 +696,22 @@ function handleAttack(_action: AgentAction, ctx: ActionContext): ActionResult {
       target.causeOfDeath = `killed by ${ctx.character.name}`;
       fameTracker.recordAchievement(ctx.character, 'Killed an opponent', 5);
     }
-    // Create enmity
     modifyRelationshipStrength(target, ctx.character.id, -0.3);
+  } else {
+    // Counter-damage from larger target
+    if (targetSize > mySize && worldRNG.chance(0.3)) {
+      const counterDmg = targetStrength * 0.008;
+      ctx.character.health = Math.max(0, ctx.character.health - counterDmg);
+      modifyRelationshipStrength(target, ctx.character.id, -0.2);
+    }
   }
 
   return {
-    success: !!success,
+    success,
     narrative: success
       ? `Your attack connects. The opponent recoils.`
-      : `You lunge, but miss your target.`,
-    effects: success && target ? [{ type: 'damage_dealt', target: target.id, value: strength * 0.01 }] : [],
+      : `You lunge, but miss your target.${targetSize > mySize ? ' The larger creature retaliates.' : ''}`,
+    effects: success ? [{ type: 'damage_dealt', target: target.id, value: strength * 0.01 }] : [],
     sensoryData: buildSensoryData(ctx),
   };
 }
@@ -588,9 +749,10 @@ function handleBreed(_action: AgentAction, ctx: ActionContext): ActionResult {
     c.isAlive,
   );
 
-  // Also consider cross-species mates (any nearby opposite-sex alive character)
+  // Also consider cross-species mates — must be opposite sex and alive
   const crossSpeciesMates = ctx.nearbyCharacters.filter(c =>
     c.speciesId !== ctx.character.speciesId &&
+    c.sex !== ctx.character.sex &&
     c.isAlive,
   );
 
@@ -815,6 +977,10 @@ function handleExperiment(action: AgentAction, ctx: ActionContext): ActionResult
 }
 
 function handleObserve(_action: AgentAction, ctx: ActionContext): ActionResult {
+  // Predator encounter risk while observing (5%)
+  const encounter = checkPredatorEncounter(ctx, 0.05);
+  if (encounter) return encounter;
+
   // Wire into species observation system
   const effects: ActionEffect[] = [];
   let narrative = `You observe your surroundings carefully.`;

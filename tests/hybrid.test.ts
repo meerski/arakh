@@ -78,17 +78,12 @@ describe('Cross-Species Breeding & Hybrid Speciation', () => {
       expect(validOutcomes).toContain(result.outcome);
     });
 
-    it('mouse approaching wolf is very dangerous', () => {
-      let deaths = 0;
-      const trials = 200;
-      for (let i = 0; i < trials; i++) {
-        const mouse = makeChar(mouseId);
-        const wolf = makeChar(wolfId);
-        const result = evaluateCrossSpeciesEncounter(mouse, wolf);
-        if (result.outcome === 'death') deaths++;
-      }
-      // Should be high death rate (>50%)
-      expect(deaths / trials).toBeGreaterThan(0.4);
+    it('mouse approaching wolf is rejected due to size incompatibility', () => {
+      // Size ratio 60/5 = 12x, far exceeds the 2x limit
+      const mouse = makeChar(mouseId);
+      const wolf = makeChar(wolfId);
+      const result = evaluateCrossSpeciesEncounter(mouse, wolf);
+      expect(result.outcome).toBe('rejection');
     });
 
     it('similar-sized herbivores are safer', () => {

@@ -36,12 +36,25 @@ const RECOVERY_THRESHOLD = 20;
 // Factory & Food Web Management
 // ============================================================
 
+/** Module-level ecosystem singleton for use by action handlers */
+let _ecosystemSingleton: EcosystemState | null = null;
+
+export function getEcosystem(): EcosystemState | null {
+  return _ecosystemSingleton;
+}
+
+export function setEcosystem(ecosystem: EcosystemState): void {
+  _ecosystemSingleton = ecosystem;
+}
+
 export function createEcosystemState(): EcosystemState {
-  return {
+  const state: EcosystemState = {
     foodWeb: [],
     carryingCapacity: new Map(),
     speciesCapacity: new Map(),
   };
+  _ecosystemSingleton = state;
+  return state;
 }
 
 export function addFoodWebRelation(

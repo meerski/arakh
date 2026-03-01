@@ -14,6 +14,11 @@ import { speciesRegistry } from './species/species.js';
 import { initializePopulation } from './species/population.js';
 import { generateHiddenLocations } from './game/exploration.js';
 import { seedTaxonomy } from './data/taxonomy/seed.js';
+import { seedBirds } from './data/taxonomy/birds.js';
+import { seedFish } from './data/taxonomy/fish.js';
+import { seedInvertebrates } from './data/taxonomy/invertebrates.js';
+import { seedReptiles } from './data/taxonomy/reptiles.js';
+import { seedMammals } from './data/taxonomy/mammals.js';
 import { seedRegions } from './data/earth/seed.js';
 import { broadcastPerceptionTicks } from './server/perception-tick.js';
 import { isBiomeSuitable, getBiomeCapacityMultiplier } from './simulation/biome.js';
@@ -32,6 +37,11 @@ async function main() {
 
   // 2. Seed taxonomy and species
   seedTaxonomy();
+  seedBirds();
+  seedFish();
+  seedInvertebrates();
+  seedReptiles();
+  seedMammals();
   const speciesCount = speciesRegistry.getAll().length;
   console.log(`Registered ${speciesCount} species`);
 
@@ -213,31 +223,43 @@ function initializeBalancedEcosystem(world: World, ecosystem: EcosystemState): v
   }
 
   // --- 2. Build realistic food web ---
-  const carnivores = allSpecies.filter(s => s.traits.diet === 'carnivore');
-  const herbivores = allSpecies.filter(s => s.traits.diet === 'herbivore');
-  const omnivores = allSpecies.filter(s => s.traits.diet === 'omnivore');
+  // Carnivores/omnivores prey on appropriately-sized species in shared habitats.
+  // Prey count scales with predator size tier: apex predators get more prey options.
+  for (const pred of allSpecies) {
+    if (pred.traits.diet !== 'carnivore' && pred.traits.diet !== 'omnivore') continue;
 
-  // Carnivores prey on smaller species
-  for (const pred of carnivores) {
-    const prey = allSpecies.filter(s =>
-      s.id !== pred.id &&
-      s.traits.size < pred.traits.size * 1.2 && // Can't eat things much bigger
-      s.traits.habitat.some(h => pred.traits.habitat.includes(h)) // Same habitat
+    // Filter feeders don't hunt individual prey
+    if (pred.traits.diet === 'filter_feeder' as string) continue;
+
+    const potentialPrey = allSpecies.filter(s => {
+      if (s.id === pred.id) return false;
+      // Must share a habitat layer
+      if (!s.traits.habitat.some(h => pred.traits.habitat.includes(h))) return false;
+      // Predator can eat things up to 1.2x its own size (pack hunters) down to 1/50 its size
+      if (s.traits.size > pred.traits.size * 1.2) return false;
+      if (s.traits.size < pred.traits.size * 0.02 && s.traits.size > 0) return false;
+      // Carnivores eat everything smaller; omnivores prefer herbivores/smaller omnivores
+      if (pred.traits.diet === 'omnivore' && s.traits.diet === 'carnivore') return false;
+      return true;
+    });
+
+    // Sort prey by size proximity (predators prefer appropriately-sized prey)
+    const idealPreySize = pred.traits.size * 0.4;
+    potentialPrey.sort((a, b) =>
+      Math.abs(a.traits.size - idealPreySize) - Math.abs(b.traits.size - idealPreySize)
     );
-    for (const p of prey.slice(0, 5)) {
-      const efficiency = 0.1 * (pred.traits.size / (p.traits.size + 1));
+
+    // Prey count scales: small predators 3-5, medium 5-8, apex 8-12
+    const maxPrey = pred.traits.diet === 'carnivore'
+      ? Math.min(12, Math.max(3, Math.floor(pred.traits.size / 10) + 3))
+      : Math.min(6, Math.max(2, Math.floor(pred.traits.size / 15) + 2));
+
+    for (const p of potentialPrey.slice(0, maxPrey)) {
+      const sizeRatio = pred.traits.size / Math.max(1, p.traits.size);
+      const efficiency = pred.traits.diet === 'carnivore'
+        ? Math.min(0.2, 0.05 + 0.03 * Math.min(3, sizeRatio))
+        : 0.03 + 0.02 * Math.min(2, sizeRatio);
       addFoodWebRelation(ecosystem, pred.id, p.id, Math.min(0.2, efficiency));
-    }
-  }
-
-  // Omnivores eat smaller herbivores
-  for (const omni of omnivores) {
-    const prey = herbivores.filter(h =>
-      h.traits.size < omni.traits.size &&
-      h.traits.habitat.some(hab => omni.traits.habitat.includes(hab))
-    );
-    for (const p of prey.slice(0, 3)) {
-      addFoodWebRelation(ecosystem, omni.id, p.id, 0.05);
     }
   }
 

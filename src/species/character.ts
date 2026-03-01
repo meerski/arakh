@@ -65,20 +65,36 @@ export function createCharacter(params: {
   };
 }
 
-function generateBaseGenetics(_speciesId: SpeciesId): Genetics {
+function generateBaseGenetics(speciesId: SpeciesId): Genetics {
   const rng = worldRNG;
+  const species = speciesRegistry.get(speciesId);
+  const traits = species?.traits;
+
+  // Seed core genes from species traits (with individual variation ±10)
   const genes: Gene[] = [
-    { trait: 'size', value: rng.gaussian(50, 10), dominant: rng.chance(0.5) },
-    { trait: 'speed', value: rng.gaussian(50, 10), dominant: rng.chance(0.5) },
-    { trait: 'strength', value: rng.gaussian(50, 10), dominant: rng.chance(0.5) },
-    { trait: 'intelligence', value: rng.gaussian(50, 10), dominant: rng.chance(0.5) },
-    { trait: 'endurance', value: rng.gaussian(50, 10), dominant: rng.chance(0.5) },
-    { trait: 'aggression', value: rng.gaussian(30, 15), dominant: rng.chance(0.5) },
-    { trait: 'curiosity', value: rng.gaussian(50, 15), dominant: rng.chance(0.5) },
-    { trait: 'sociability', value: rng.gaussian(50, 15), dominant: rng.chance(0.5) },
+    { trait: 'size', value: clampGene(traits?.size ?? 50, 10), dominant: rng.chance(0.5) },
+    { trait: 'speed', value: clampGene(traits?.speed ?? 50, 10), dominant: rng.chance(0.5) },
+    { trait: 'strength', value: clampGene(traits?.strength ?? 50, 10), dominant: rng.chance(0.5) },
+    { trait: 'intelligence', value: clampGene(traits?.intelligence ?? 50, 10), dominant: rng.chance(0.5) },
+    { trait: 'endurance', value: clampGene(rng.gaussian(50, 10), 0), dominant: rng.chance(0.5) },
+    { trait: 'aggression', value: clampGene(rng.gaussian(30, 15), 0), dominant: rng.chance(0.5) },
+    { trait: 'curiosity', value: clampGene(rng.gaussian(50, 15), 0), dominant: rng.chance(0.5) },
+    { trait: 'sociability', value: clampGene(rng.gaussian(50, 15), 0), dominant: rng.chance(0.5) },
+    // Appearance genes — cosmetic variation within species
+    { trait: 'body_size_var', value: clampGene(rng.gaussian(50, 12), 0), dominant: rng.chance(0.5) },
+    { trait: 'limb_length', value: clampGene(rng.gaussian(50, 10), 0), dominant: rng.chance(0.5) },
+    { trait: 'coat_shade', value: clampGene(rng.gaussian(50, 20), 0), dominant: rng.chance(0.7) },
+    { trait: 'marking_pattern', value: clampGene(rng.gaussian(50, 25), 0), dominant: rng.chance(0.4) },
+    { trait: 'ear_size', value: clampGene(rng.gaussian(50, 12), 0), dominant: rng.chance(0.5) },
+    { trait: 'teeth_size', value: clampGene(rng.gaussian(50, 10), 0), dominant: rng.chance(0.6) },
   ];
 
   return { genes, mutationRate: 0.05 };
+}
+
+function clampGene(base: number, spread: number): number {
+  const value = spread > 0 ? worldRNG.gaussian(base, spread) : base;
+  return Math.max(0, Math.min(100, value));
 }
 
 /** Species-flavored name generation */
@@ -149,9 +165,12 @@ export function updateCharacterTick(character: Character, tick: number): {
   // Age
   character.age = tick - character.bornAtTick;
 
-  // Natural needs
-  character.hunger = Math.min(1, character.hunger + 0.001);
-  character.energy = Math.max(0, character.energy - 0.0005);
+  // Natural needs — metabolic rate scales inversely with size and lifespan
+  // Small, fast species get hungry quicker; large, slow species are more efficient
+  const sizeEff = species.traits.size > 0 ? species.traits.size : 10;
+  const metabolicRate = Math.max(0.3, Math.min(3.0, 50 / sizeEff));
+  character.hunger = Math.min(1, character.hunger + 0.001 * metabolicRate);
+  character.energy = Math.max(0, character.energy - 0.0005 * metabolicRate);
 
   // Starvation
   if (character.hunger >= 1) {

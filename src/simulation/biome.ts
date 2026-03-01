@@ -25,6 +25,10 @@ const AQUATIC_BIOMES: Set<Biome> = new Set([
   'wetland', 'coastal', 'underground_river',
 ]);
 
+const ARID_BIOMES: Set<Biome> = new Set([
+  'desert', 'savanna', 'grassland',
+]);
+
 const UNDERGROUND_BIOMES: Set<Biome> = new Set([
   'cave_system', 'underground_river', 'subterranean_ecosystem',
 ]);
@@ -52,6 +56,8 @@ function getToleratedBiomes(species: Species): Set<Biome> | null {
   const coldAdapted = isColdAdapted(name, taxonomy);
   const tropicalAdapted = isTropicalAdapted(name, taxonomy);
 
+  const desertAdapted = isDesertAdapted(name, taxonomy);
+
   if (coldAdapted && !tropicalAdapted) {
     // Only cold + temperate biomes
     return new Set([...COLD_BIOMES, ...TEMPERATE_BIOMES, ...UNDERGROUND_BIOMES]);
@@ -60,6 +66,11 @@ function getToleratedBiomes(species: Species): Set<Biome> | null {
   if (tropicalAdapted && !coldAdapted) {
     // Only tropical + temperate biomes
     return new Set([...TROPICAL_BIOMES, ...TEMPERATE_BIOMES, ...UNDERGROUND_BIOMES]);
+  }
+
+  if (desertAdapted) {
+    // Desert + arid biomes + temperate
+    return new Set([...ARID_BIOMES, ...TEMPERATE_BIOMES, 'desert' as Biome, ...UNDERGROUND_BIOMES]);
   }
 
   // Generalist species (small, medium, or explicitly wide-ranging) — no climate restriction
@@ -74,11 +85,13 @@ function isColdAdapted(name: string, taxonomy: { family: string; order: string }
   const coldNames = [
     'arctic', 'polar', 'snow', 'snowy', 'penguin', 'walrus', 'seal',
     'moose', 'caribou', 'reindeer', 'musk', 'lemming', 'wolverine',
-    'arctic fox', 'ermine', 'ptarmigan', 'yak',
+    'arctic fox', 'ermine', 'ptarmigan', 'yak', 'narwhal', 'beluga',
+    'greenland', 'puffin', 'lynx', 'elk', 'wapiti', 'musk ox',
+    'snowy owl', 'gyrfalcon', 'stoat', 'olm', 'hellbender',
   ];
   if (coldNames.some(n => name.includes(n))) return true;
 
-  const coldFamilies = ['Odobenidae', 'Phocidae'];
+  const coldFamilies = ['Odobenidae', 'Phocidae', 'Otariidae', 'Alcidae'];
   if (coldFamilies.includes(taxonomy.family)) return true;
 
   return false;
@@ -91,13 +104,25 @@ function isTropicalAdapted(name: string, taxonomy: { family: string; order: stri
     'lion', 'leopard', 'rhino', 'zebra', 'crocodile', 'parrot', 'macaw',
     'toucan', 'jaguar', 'sloth', 'pangolin', 'lemur', 'cassowary',
     'komodo', 'iguana', 'chameleon', 'anaconda', 'python', 'mamba',
-    'flamingo', 'mandrill', 'baboon', 'colobus', 'howler',
+    'flamingo', 'mandrill', 'baboon', 'colobus', 'howler', 'ocelot',
+    'serval', 'caracal', 'gibbon', 'bonobo', 'spider monkey', 'tarsier',
+    'proboscis', 'okapi', 'impala', 'kudu', 'wildebeest', 'warthog',
+    'hyena', 'meerkat', 'mongoose', 'wild dog', 'aardvark', 'sugar glider',
+    'taipan', 'gaboon', 'coral snake', 'boa', 'king cobra', 'dart frog',
+    'tree frog', 'caecilian', 'cane toad', 'marine iguana', 'tegu',
+    'basilisk', 'gila', 'thorny devil', 'frilled', 'clownfish',
+    'lionfish', 'parrotfish', 'grouper', 'barracuda', 'mantis shrimp',
+    'coconut crab', 'box jellyfish', 'crown-of-thorns',
+    'blue morpho', 'leafcutter', 'army ant', 'bullet ant', 'fire ant',
+    'asian giant hornet', 'hercules', 'goliath',
   ];
   if (tropicalNames.some(n => name.includes(n))) return true;
 
   const tropicalFamilies = [
     'Hippopotamidae', 'Giraffidae', 'Rhinocerotidae',
     'Crocodylidae', 'Hominidae', 'Cercopithecidae',
+    'Atelidae', 'Hyaenidae', 'Herpestidae', 'Viverridae',
+    'Elapidae', 'Viperidae', 'Boidae', 'Chamaeleonidae',
   ];
   if (tropicalFamilies.includes(taxonomy.family)) return true;
 
@@ -105,6 +130,16 @@ function isTropicalAdapted(name: string, taxonomy: { family: string; order: stri
   if (tropicalOrders.includes(taxonomy.order)) return true;
 
   return false;
+}
+
+/** Check if a species is desert/arid-adapted based on name/taxonomy */
+function isDesertAdapted(name: string, taxonomy: { family: string; order: string }): boolean {
+  const desertNames = [
+    'desert', 'sand', 'sidewinder', 'fennec', 'camel', 'scorpion',
+    'rattlesnake', 'diamondback', 'jerboa', 'tortoise', 'roadrunner',
+    'thorny devil', 'gila', 'horned lizard', 'addax', 'oryx',
+  ];
+  return desertNames.some(n => name.includes(n));
 }
 
 /**

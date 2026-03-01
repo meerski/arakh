@@ -75,18 +75,62 @@ const AQUATIC_VOICE: SpeciesVoice = {
   failureAdjectives: ['beached', 'outswum', 'outmaneuvered', 'stranded'],
 };
 
+const AERIAL_VOICE: SpeciesVoice = {
+  moveVerbs: ['soars', 'swoops', 'wheels', 'glides', 'circles'],
+  eatVerbs: ['snatches', 'plucks', 'dives for', 'catches mid-flight', 'picks off'],
+  fightVerbs: ['dives at', 'talons flash at', 'stoops on', 'harries', 'circles above'],
+  socialVerbs: ['calls to', 'roosts with', 'displays for', 'nests beside', 'flocks with'],
+  deathDescriptors: ['fell from the sky', 'took a final flight', 'wings folded for the last time'],
+  birthDescriptors: ['A fledgling stirs in the nest', 'New wings unfurl', 'The sky gains another'],
+  successAdjectives: ['keen-eyed', 'swift', 'graceful', 'sharp'],
+  failureAdjectives: ['grounded', 'clipped', 'outflown', 'battered by wind'],
+};
+
+const NOCTURNAL_VOICE: SpeciesVoice = {
+  moveVerbs: ['creeps', 'slinks', 'emerges', 'prowls silently', 'shadows'],
+  eatVerbs: ['snatches in the dark', 'catches by sound', 'hunts by moonlight', 'finds by scent', 'ambushes'],
+  fightVerbs: ['strikes from shadow', 'lunges unseen', 'ambushes', 'startles', 'pounces silently'],
+  socialVerbs: ['calls into the dark', 'echoes back to', 'huddles with', 'shares the den with', 'signals softly'],
+  deathDescriptors: ['slipped away in the dark', 'faded with the dawn', 'was taken by the night'],
+  birthDescriptors: ['Born under cover of darkness', 'Night welcomes a new hunter', 'A shadow stirs to life'],
+  successAdjectives: ['silent', 'unseen', 'patient', 'sharp-eared'],
+  failureAdjectives: ['blinded', 'exposed', 'caught in daylight', 'startled'],
+};
+
+const UNDERGROUND_VOICE: SpeciesVoice = {
+  moveVerbs: ['burrows', 'tunnels', 'scuttles', 'digs through', 'wriggles'],
+  eatVerbs: ['unearths', 'gnaws', 'roots out', 'strips the soil of', 'finds below'],
+  fightVerbs: ['claws at', 'bites blindly', 'blocks the tunnel', 'collapses earth on', 'defends the burrow'],
+  socialVerbs: ['shares the tunnel with', 'digs alongside', 'grooms in the dark', 'warms', 'guards the nest'],
+  deathDescriptors: ['was buried where they lived', 'returned to the earth', 'the tunnel fell silent'],
+  birthDescriptors: ['Deep below, new life stirs', 'The warren grows', 'A small shape moves in the dark'],
+  successAdjectives: ['tenacious', 'tireless', 'keen-nosed', 'sturdy'],
+  failureAdjectives: ['trapped', 'caved in', 'flooded out', 'dug out'],
+};
+
 /** Get the narrative voice profile for a species */
 export function getSpeciesVoice(speciesId: string): SpeciesVoice {
   const species = speciesRegistry.get(speciesId);
   if (!species) return OMNIVORE_VOICE;
 
+  // Underground species override
+  if (species.traits.habitat.includes('underground') && !species.traits.habitat.includes('surface')) {
+    return UNDERGROUND_VOICE;
+  }
+
   // Aquatic species override
   if (species.traits.aquatic) return AQUATIC_VOICE;
+
+  // Flying carnivore/raptor override (birds of prey)
+  if (species.traits.canFly && species.traits.diet === 'carnivore') return AERIAL_VOICE;
 
   // Colony/hive override
   if (species.traits.socialStructure === 'colony' || species.traits.socialStructure === 'hive') {
     return COLONY_VOICE;
   }
+
+  // Nocturnal override (when also carnivore)
+  if (species.traits.nocturnal && species.traits.diet === 'carnivore') return NOCTURNAL_VOICE;
 
   // Diet-based selection
   switch (species.traits.diet) {
