@@ -34,13 +34,24 @@ export class NewsBroadcast {
   private recaps: DailyRecap[] = [];
   private maxRecaps = 30; // Keep last 30 days
 
-  /** Process a tick through all gamemasters. */
+  /** Process a tick through all gamemasters, deduplicating breaking news. */
   processTick(result: TickResult): BroadcastMessage[] {
     const allMessages: BroadcastMessage[] = [];
 
+    // Track which events have already been broadcast to avoid cross-GM duplicates
+    const seenCoreTexts = new Set<string>();
+
     for (const gm of gamemasters) {
       const messages = gm.processTick(result);
-      allMessages.push(...messages);
+      for (const msg of messages) {
+        if (msg.category === 'breaking' || msg.category === 'highlight') {
+          // Strip gamemaster prefix to get the core event text for dedup
+          const coreText = msg.text.replace(/^\[.*?\]\s*/, '');
+          if (seenCoreTexts.has(coreText)) continue; // Skip duplicate from other GM
+          seenCoreTexts.add(coreText);
+        }
+        allMessages.push(msg);
+      }
     }
 
     this.feed.push(...allMessages);

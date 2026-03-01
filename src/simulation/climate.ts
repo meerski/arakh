@@ -816,7 +816,7 @@ export function checkNaturalDisaster(
     type: chosen.type,
     level: 'regional',
     regionIds: [region.id],
-    description: `A ${chosen.desc} strikes ${region.name}`,
+    description: `${/^[aeiou]/i.test(chosen.desc) ? 'An' : 'A'} ${chosen.desc} strikes ${region.name}`,
     tick: time.tick,
     effects: [{
       type: 'climate_disruption',

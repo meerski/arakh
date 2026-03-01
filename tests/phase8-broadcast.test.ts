@@ -131,14 +131,16 @@ describe('Phase 8 — Broadcast & Human Experience', () => {
       _installGamemasters([new Gamemaster('Chronos'), new Gamemaster('Gaia')]);
     });
 
-    it('processes tick through all gamemasters', () => {
+    it('processes tick through all gamemasters (deduplicates breaking)', () => {
       const news = new NewsBroadcast();
       const result = makeTickResult({
         events: [makeEvent({ level: 'global', type: 'extinction', description: 'Plague spreads!' })],
       });
       const messages = news.processTick(result);
-      // Both gamemasters should pick up global extinction event
-      expect(messages.length).toBeGreaterThanOrEqual(2);
+      // Breaking news is deduplicated — only the first gamemaster's version is kept
+      const breaking = messages.filter(m => m.category === 'breaking');
+      expect(breaking).toHaveLength(1);
+      expect(messages.length).toBeGreaterThanOrEqual(1);
     });
 
     it('retrieves latest news', () => {

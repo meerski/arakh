@@ -80,8 +80,46 @@ const LEVEL_MULTIPLIER: Record<string, number> = {
   personal: 0.3,
 };
 
+export type GamemasterVoice = 'chronicler' | 'naturalist';
+
+/** Personality templates for different gamemaster voices. */
+const VOICE_TEMPLATES: Record<GamemasterVoice, {
+  breaking: (desc: string) => string;
+  highlight: (desc: string) => string;
+  deathCommentary: (count: number) => string;
+  birthCommentary: (count: number) => string;
+  discoveryCommentary: (count: number) => string;
+  ambient: (actions: number) => string[];
+}> = {
+  chronicler: {
+    breaking: (desc) => `BREAKING: ${desc}`,
+    highlight: (desc) => desc,
+    deathCommentary: (n) => `The annals record ${n} souls lost this cycle. History weighs heavy.`,
+    birthCommentary: (n) => `${n} new lives are inscribed into the chronicle.`,
+    discoveryCommentary: (n) => `${n} discoveries reshape the historical record.`,
+    ambient: (actions) => [
+      `The world turns in measured silence. ${actions} actions etched into the record.`,
+      `A quiet chapter unfolds. The chronicle waits for greater deeds.`,
+      `No great upheaval — yet the small currents of history flow onward.`,
+    ],
+  },
+  naturalist: {
+    breaking: (desc) => `BREAKING: ${desc}`,
+    highlight: (desc) => desc,
+    deathCommentary: (n) => `The earth reclaims ${n} lives this cycle. The web of life reshapes itself.`,
+    birthCommentary: (n) => `${n} new creatures stir — the pulse of life quickens.`,
+    discoveryCommentary: (n) => `${n} discoveries bloom like flowers after rain.`,
+    ambient: (actions) => [
+      `The ecosystem breathes steadily. ${actions} small ripples across the web of life.`,
+      `Nature rests, gathering strength. The balance holds — for now.`,
+      `No storms, no extinctions — but beneath the calm, a thousand roots grow deeper.`,
+    ],
+  },
+};
+
 export class Gamemaster {
   private name: string;
+  private voice: GamemasterVoice;
   private broadcastHistory: BroadcastMessage[] = [];
   private maxHistory = 500;
 
@@ -93,9 +131,12 @@ export class Gamemaster {
 
   // Track recently told stories to avoid repetition
   private recentStoryTypes = new Set<string>();
+  // Track recently broadcast descriptions to avoid cross-tick spam
+  private recentBroadcastDescs = new Set<string>();
 
-  constructor(name: string) {
+  constructor(name: string, voice: GamemasterVoice = 'chronicler') {
     this.name = name;
+    this.voice = voice;
   }
 
   /** Process a tick's results. Observe only — never modify. */
@@ -124,9 +165,11 @@ export class Gamemaster {
         this.windowStats.regionActivity.set(regionId, rCount + 1);
       }
 
-      // Immediate breaking news for truly global events
+      // Immediate breaking news for truly significant events
       if (score >= 80) {
-        messages.push(this.createMessage(result.tick, 'breaking', event));
+        const msg = this.createMessage(result.tick, 'breaking', event);
+        messages.push(msg);
+        this.recentBroadcastDescs.add(event.description.slice(0, 80));
       }
     }
 
@@ -140,6 +183,7 @@ export class Gamemaster {
       this.eventBuffer = [];
       this.windowStats = emptyWindowStats();
       this.recentStoryTypes.clear();
+      this.recentBroadcastDescs.clear();
     }
 
     // Store in history
@@ -206,7 +250,16 @@ export class Gamemaster {
     // Freshness bonus: penalize event types we've recently covered
     const freshness = this.recentStoryTypes.has(event.type) ? 0.5 : 1.0;
 
-    return baseScore * levelMult * freshness;
+    // Resolved/ended events are less newsworthy than active ones
+    const resolutionPenalty = (event.resolved && event.effects.some(
+      e => e.type === 'catastrophe_end'
+    )) ? 0.3 : 1.0;
+
+    // Cross-tick dedup: penalize events with description we've recently broadcast
+    const descKey = event.description.slice(0, 80);
+    const recentlyBroadcast = this.recentBroadcastDescs.has(descKey) ? 0.1 : 1.0;
+
+    return baseScore * levelMult * freshness * resolutionPenalty * recentlyBroadcast;
   }
 
   /** Create a broadcast message for an event. */
@@ -215,11 +268,15 @@ export class Gamemaster {
     category: BroadcastMessage['category'],
     event: WorldEvent,
   ): BroadcastMessage {
-    const prefix = category === 'breaking' ? 'BREAKING: ' : '';
+    const tpl = VOICE_TEMPLATES[this.voice];
+    const narrated = narrateEvent(event);
+    const text = category === 'breaking'
+      ? tpl.breaking(narrated)
+      : tpl.highlight(narrated);
     return {
       timestamp: tick,
       category,
-      text: `[${this.name}] ${prefix}${narrateEvent(event)}`,
+      text: `[${this.name}] ${text}`,
       gamemasterName: this.name,
       relevanceTags: [...event.regionIds],
     };
@@ -228,16 +285,17 @@ export class Gamemaster {
   /** Generate commentary summarizing the broadcast window. */
   private generateWindowCommentary(tick: number): BroadcastMessage | null {
     const s = this.windowStats;
+    const tpl = VOICE_TEMPLATES[this.voice];
     const parts: string[] = [];
 
     if (s.totalDeaths > 5) {
-      parts.push(`A difficult period. ${s.totalDeaths} souls lost this cycle.`);
+      parts.push(tpl.deathCommentary(s.totalDeaths));
     }
     if (s.totalBirths > 3) {
-      parts.push(`${s.totalBirths} new lives emerged.`);
+      parts.push(tpl.birthCommentary(s.totalBirths));
     }
     if (s.totalDiscoveries > 0) {
-      parts.push(`${s.totalDiscoveries} discoveries reshape understanding.`);
+      parts.push(tpl.discoveryCommentary(s.totalDiscoveries));
     }
 
     if (parts.length === 0) return null;
@@ -259,11 +317,7 @@ export class Gamemaster {
       return null;
     }
 
-    const lines = [
-      `The world turns quietly. ${s.totalActions} actions taken in silence.`,
-      `A calm stretch. Life persists without spectacle.`,
-      `No great events, but the small struggles of survival continue.`,
-    ];
+    const lines = VOICE_TEMPLATES[this.voice].ambient(s.totalActions);
 
     // Simple deterministic pick based on tick
     const text = lines[tick % lines.length];
@@ -315,6 +369,7 @@ export class Gamemaster {
     this.eventBuffer = [];
     this.windowStats = emptyWindowStats();
     this.recentStoryTypes.clear();
+    this.recentBroadcastDescs.clear();
     return curated;
   }
 
@@ -324,13 +379,14 @@ export class Gamemaster {
     this.windowStats = emptyWindowStats();
     this.ticksSinceLastBroadcast = 0;
     this.recentStoryTypes.clear();
+    this.recentBroadcastDescs.clear();
   }
 }
 
-// Create default gamemasters
+// Create default gamemasters with distinct voices
 export let gamemasters: Gamemaster[] = [
-  new Gamemaster('Chronos'),
-  new Gamemaster('Gaia'),
+  new Gamemaster('Chronos', 'chronicler'),
+  new Gamemaster('Gaia', 'naturalist'),
 ];
 
 export function _installGamemasters(instance: Gamemaster[]): void { gamemasters = instance; }

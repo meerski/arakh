@@ -159,11 +159,12 @@ export class SimulationLoop {
       // Population dynamics
       const popUpdates = updatePopulations(region, this.ecosystem);
 
-      // Track significant births/deaths from population changes
+      // Track significant births/deaths from population changes (only truly dramatic shifts)
       for (const update of popUpdates) {
-        if (update.delta > 0 && update.delta > update.oldCount * 0.1) {
-          // Significant population boom
-          discoveries.push(`${update.speciesId} population is booming in ${region.name}`);
+        if (update.delta > 0 && update.delta > update.oldCount * 0.5 && update.oldCount >= 20) {
+          // Dramatic population boom (50%+ increase with meaningful base)
+          const species = speciesRegistry.get(update.speciesId);
+          discoveries.push(`${species?.commonName ?? update.speciesId} population is booming in ${region.name}`);
         }
       }
 
@@ -191,7 +192,8 @@ export class SimulationLoop {
     for (const region of regions) {
       const incidentalResults = processIncidentalKills(region, tick);
       for (const result of incidentalResults) {
-        if (result.killed > 0) {
+        if (result.killed >= 50) {
+          // Only noteworthy mass trampling events
           const largeSpecies = speciesRegistry.get(result.largeSpeciesId);
           const smallSpecies = speciesRegistry.get(result.smallSpeciesId);
           discoveries.push(`${largeSpecies?.commonName ?? 'Large species'} trampled ${result.killed} ${smallSpecies?.commonName ?? 'small creatures'} in ${region.name}`);
@@ -206,12 +208,14 @@ export class SimulationLoop {
     encounterRegistry.expireEncounters(tick);
 
     // 3. Migration check (populations spill into connected regions)
+    let migrationCount = 0;
     for (const region of regions) {
       const migrations = checkMigration(region, this.ecosystem, this.world.regions);
-      for (const migration of migrations) {
-        const species = this.ecosystem.foodWeb.length > 0 ? migration.speciesId : migration.speciesId;
-        discoveries.push(`A group has migrated from ${region.name}`);
-      }
+      migrationCount += migrations.length;
+    }
+    // Only log migration as discovery when it's notably high
+    if (migrationCount > regions.length * 0.1) {
+      discoveries.push(`${migrationCount} migration events across the world`);
     }
 
     // 4. Ecosystem health checks (extinctions, depletions, collapses)
@@ -510,8 +514,16 @@ export class SimulationLoop {
       item.deliver(result);
     }
 
+    // Deduplicate events by ID (same event can be generated from multiple regions)
+    const seenEventIds = new Set<string>();
+    const dedupedEvents = events.filter(e => {
+      if (seenEventIds.has(e.id)) return false;
+      seenEventIds.add(e.id);
+      return true;
+    });
+
     tickMetrics.recordTick(Date.now() - tickStart);
-    return { tick, time, events, births, deaths, discoveries, actionResults };
+    return { tick, time, events: dedupedEvents, births, deaths, discoveries, actionResults };
   }
 
   getWorld(): World {
